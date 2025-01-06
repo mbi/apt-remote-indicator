@@ -22,16 +22,9 @@ class App(object):
     def __init__(self, config):
         self._config = config
 
-        self._on_icon = os.path.join(
-            os.path.dirname(__file__), self._config["icons"]["icon"]
-        )
-        self._off_icon = os.path.join(
-            os.path.dirname(__file__), self._config["icons"]["icon_no_updates"]
-        )
-
         self._indicator = appindicator.Indicator.new(
             APPINDICATOR_ID,
-            self._off_icon,
+            os.path.join(os.path.dirname(__file__), "openlogo-nd.svg"),
             appindicator.IndicatorCategory.SYSTEM_SERVICES,
         )
 
@@ -73,8 +66,6 @@ class App(object):
         return True
 
     def update(self, *args, **kwargs):
-        self._indicator.set_icon_full(self._off_icon, "updating")
-
         ssh = SSHClient()
         ssh.load_system_host_keys()
         ssh.set_missing_host_key_policy(AutoAddPolicy())
@@ -92,9 +83,11 @@ class App(object):
             if line.startswith("Inst ")
         ]
         self._indicator.set_menu(self.build_menu(lines))
-        icon = self._on_icon if lines else self._off_icon
-
-        self._indicator.set_icon_full(icon, f"{len(lines)} updates available")
+        updates_count = len(lines)
+        if updates_count:
+            self._indicator.set_label(str(updates_count), str(updates_count))
+        else:
+            self._indicator.set_label("", "")
 
         # Avoid looping when called with timeout_add_seconds
         return None

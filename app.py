@@ -5,29 +5,25 @@ import subprocess
 import sys
 
 import gi
+from gi.repository import AppIndicator3 as appindicator  # noqa
+from gi.repository import GLib  # noqa
+from gi.repository import Gtk as gtk  # noqa
+from gi.repository import Notify as notify  # noqa
 from paramiko import AutoAddPolicy, SSHClient
 
-gi.require_version("Notify", "0.7")
-gi.require_version("AppIndicator3", "0.1")
+gi.require_version("Notify", "0.7")  # noqa
+gi.require_version("AppIndicator3", "0.1")  # noqa
 
-
-UPDATE_COMMAND = "kitty -o hide_window_decorations=no /bin/sh -c apt-dater"
-
-from gi.repository import Notify as notify  #  noqa
-from gi.repository import AppIndicator3 as appindicator  # noqa
-from gi.repository import Gtk as gtk  # noqa
-from gi.repository import GLib  # noqa
 
 APPINDICATOR_ID = "remote-apt-dater"
 
 
 class App(object):
     def __init__(self, config):
-        self.config = config
-
+        self._config = config
         self._indicator = appindicator.Indicator.new(
             APPINDICATOR_ID,
-            os.path.abspath(self.config["icons"]["icon_no_updates"]),
+            os.path.abspath(self._config["icons"]["icon_no_updates"]),
             appindicator.IndicatorCategory.SYSTEM_SERVICES,
         )
 
@@ -58,7 +54,7 @@ class App(object):
         self._indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
         self._indicator.set_menu(self.build_menu())
         GLib.timeout_add_seconds(
-            int(self.config["update"]["update_interval"]), self.update_loop
+            int(self._config["update"]["update_interval"]), self.update_loop
         )
         self.update()
 
@@ -69,16 +65,16 @@ class App(object):
         return True
 
     def update(self, *args, **kwargs):
-        print("updating...")
         self._indicator.set_icon_full(
-            os.path.abspath(self.config["icons"]["icon_no_updates"]), "updating"
+            os.path.abspath(self._config["icons"]["icon_no_updates"]), "updating"
         )
 
         ssh = SSHClient()
         ssh.load_system_host_keys()
         ssh.set_missing_host_key_policy(AutoAddPolicy())
         ssh.connect(
-            self.config["ssh"]["ssh_hostname"], username=self.config["ssh"]["ssh_user"]
+            self._config["ssh"]["ssh_hostname"],
+            username=self._config["ssh"]["ssh_user"],
         )
         stdin_, stdout_, stderr_ = ssh.exec_command(
             "sudo apt-get -q -y --ignore-hold --allow-change-held-packages -s dist-upgrade"
@@ -90,24 +86,20 @@ class App(object):
             if line.startswith("Inst ")
         ]
         self._indicator.set_menu(self.build_menu(lines))
+        icon = (
+            os.path.abspath(self._config["icons"]["icon"])
+            if lines
+            else os.path.abspath(self._config["icons"]["icon_no_updates"])
+        )
+        assert os.path.exists(icon)
 
-        if len(lines):
-            self._indicator.set_icon_full(
-                os.path.abspath(self.config["icons"]["icon"]), str(len(lines))
-            )
-        else:
-            self._indicator.set_icon_full(
-                os.path.abspath(self.config["icons"]["icon_no_updates"]),
-                str(len(lines)),
-            )
-
-        print("updated")
+        self._indicator.set_icon_full(icon, f"{len(lines)} updates available")
 
         # Avoid looping when called with timeout_add_seconds
         return None
 
     def upgrade(self, *args, **kwargs):
-        proc = subprocess.Popen(self.config["update"]["update_command"].split(" "))
+        proc = subprocess.Popen(self._config["update"]["upgrade_command"].split(" "))
         try:
             outs, errs = proc.communicate()
         finally:
@@ -120,6 +112,7 @@ if __name__ == "__main__":
         config.read("config.ini")
 
         App(config).main()
+
     except KeyboardInterrupt:
         notify.uninit()
         sys.exit(0)

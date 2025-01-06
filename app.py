@@ -21,9 +21,17 @@ APPINDICATOR_ID = "remote-apt-dater"
 class App(object):
     def __init__(self, config):
         self._config = config
+
+        self._on_icon = os.path.join(
+            os.path.dirname(__file__), self._config["icons"]["icon"]
+        )
+        self._off_icon = os.path.join(
+            os.path.dirname(__file__), self._config["icons"]["icon_no_updates"]
+        )
+
         self._indicator = appindicator.Indicator.new(
             APPINDICATOR_ID,
-            os.path.abspath(self._config["icons"]["icon_no_updates"]),
+            self._off_icon,
             appindicator.IndicatorCategory.SYSTEM_SERVICES,
         )
 
@@ -37,7 +45,7 @@ class App(object):
         item_update.connect("activate", self.update)
         menu.append(item_update)
 
-        if updates or True:
+        if updates:
             item_upgrade = gtk.MenuItem(label="Run upgrades")
             item_upgrade.connect("activate", self.upgrade)
             menu.append(item_upgrade)
@@ -65,9 +73,7 @@ class App(object):
         return True
 
     def update(self, *args, **kwargs):
-        self._indicator.set_icon_full(
-            os.path.abspath(self._config["icons"]["icon_no_updates"]), "updating"
-        )
+        self._indicator.set_icon_full(self._off_icon, "updating")
 
         ssh = SSHClient()
         ssh.load_system_host_keys()
@@ -86,12 +92,7 @@ class App(object):
             if line.startswith("Inst ")
         ]
         self._indicator.set_menu(self.build_menu(lines))
-        icon = (
-            os.path.abspath(self._config["icons"]["icon"])
-            if lines
-            else os.path.abspath(self._config["icons"]["icon_no_updates"])
-        )
-        assert os.path.exists(icon)
+        icon = self._on_icon if lines else self._off_icon
 
         self._indicator.set_icon_full(icon, f"{len(lines)} updates available")
 
@@ -109,7 +110,7 @@ class App(object):
 if __name__ == "__main__":
     try:
         config = configparser.ConfigParser()
-        config.read("config.ini")
+        config.read(os.path.join(os.path.dirname(__file__), "config.ini"))
 
         App(config).main()
 

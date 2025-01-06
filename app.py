@@ -34,12 +34,12 @@ class App(object):
         for app, version in updates:
             menu.append(gtk.MenuItem(label=f"{app} {version}"))
 
-        item_update = gtk.MenuItem(label="Update")
+        item_update = gtk.MenuItem(label="Check now")
         item_update.connect("activate", self.update)
         menu.append(item_update)
 
         if updates:
-            item_upgrade = gtk.MenuItem(label="Run upgrades")
+            item_upgrade = gtk.MenuItem(label="Upgrade")
             item_upgrade.connect("activate", self.upgrade)
             menu.append(item_upgrade)
 

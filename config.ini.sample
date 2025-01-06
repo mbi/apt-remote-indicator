@@ -1,0 +1,11 @@
+[ssh]
+ssh_hostname = hostname
+ssh_user = username
+
+[icons]
+icon = openlogo-nd.svg
+icon_no_updates = openlogo-nd-light.svg
+
+[update]
+upgrade_command = "kitty -o hide_window_decorations=no /bin/sh -c apt-dater"
+update_interval = 120

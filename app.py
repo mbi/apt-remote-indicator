@@ -3,7 +3,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 
 import gi
 from paramiko import AutoAddPolicy, SSHClient
@@ -23,14 +22,14 @@ class App(object):
     def __init__(self, config):
         self._config = config
 
-        self._indicator = appindicator.Indicator.new(
+        self._indicator = appindicator.Indicator.new_with_path(
             APPINDICATOR_ID,
-            "",
+            "sleeping.svg",
             appindicator.IndicatorCategory.SYSTEM_SERVICES,
+            os.path.join(os.path.dirname(__file__)),
         )
 
-        self._indicator.set_icon_theme_path(os.path.join(os.path.dirname(__file__)))
-        self._indicator.set_icon_full("openlogo-nd.svg", "Running")
+        self._indicator.set_attention_icon_full("updating.svg", "Updating")
 
     def build_menu(self, updates=[]):
         menu = gtk.Menu()
@@ -61,7 +60,7 @@ class App(object):
         GLib.timeout_add_seconds(
             int(self._config["update"]["update_interval"]), self.update_loop
         )
-        self.update()
+        GLib.timeout_add_seconds(2, self.update)
 
         gtk.main()
 
@@ -71,12 +70,9 @@ class App(object):
 
     def update(self, *args, **kwargs):
         print("Updating")
-        self._indicator.set_icon_full(
-            "openlogo-nd-updating.svg",
-            "Updating",
-        )
+        self._indicator.set_status(appindicator.IndicatorStatus.ATTENTION)
+        # print("Updating")
         self._indicator.set_label("", "")
-        time.sleep(3)
 
         ssh = SSHClient()
         try:
@@ -104,18 +100,22 @@ class App(object):
 
             # Avoid looping when called with timeout_add_seconds
         except Exception:
-            print("Updating failed, settings locked state")
+            # print("Updating failed, settings locked state")
             self._indicator.set_icon_full(
-                "openlogo-nd-locked.svg",
+                "locked.svg",
                 "Error connecting",
             )
             self._indicator.set_label("", "")
         else:
-            print("Update done")
+            #  print("Update done")
             self._indicator.set_icon_full(
-                "openlogo-nd.svg",
+                "sleeping.svg",
                 "Update success",
             )
+
+        finally:
+            self._indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+            print("Update done")
 
         return None
 

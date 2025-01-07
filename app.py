@@ -3,17 +3,18 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 import gi
-from gi.repository import AppIndicator3 as appindicator  # noqa
-from gi.repository import GLib  # noqa
-from gi.repository import Gtk as gtk  # noqa
-from gi.repository import Notify as notify  # noqa
 from paramiko import AutoAddPolicy, SSHClient
 
 gi.require_version("Notify", "0.7")  # noqa
 gi.require_version("AppIndicator3", "0.1")  # noqa
 
+from gi.repository import AppIndicator3 as appindicator  # noqa
+from gi.repository import GLib  # noqa
+from gi.repository import Gtk as gtk  # noqa
+from gi.repository import Notify as notify  # noqa
 
 APPINDICATOR_ID = "remote-apt-dater"
 
@@ -24,9 +25,12 @@ class App(object):
 
         self._indicator = appindicator.Indicator.new(
             APPINDICATOR_ID,
-            os.path.join(os.path.dirname(__file__), "openlogo-nd.svg"),
+            "",
             appindicator.IndicatorCategory.SYSTEM_SERVICES,
         )
+
+        self._indicator.set_icon_theme_path(os.path.join(os.path.dirname(__file__)))
+        self._indicator.set_icon_full("openlogo-nd.svg", "Running")
 
     def build_menu(self, updates=[]):
         menu = gtk.Menu()
@@ -66,30 +70,53 @@ class App(object):
         return True
 
     def update(self, *args, **kwargs):
-        ssh = SSHClient()
-        ssh.load_system_host_keys()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        ssh.connect(
-            self._config["ssh"]["ssh_hostname"],
-            username=self._config["ssh"]["ssh_user"],
+        print("Updating")
+        self._indicator.set_icon_full(
+            "openlogo-nd-updating.svg",
+            "Updating",
         )
-        stdin_, stdout_, stderr_ = ssh.exec_command(
-            "sudo apt-get -q -y --ignore-hold --allow-change-held-packages -s dist-upgrade"
-        )
-        stdout_.channel.recv_exit_status()
-        lines = [
-            re.match(r"Inst (?P<app>\w+) \[(?P<version>[^\]]+)\]", line).groups()
-            for line in stdout_.readlines()
-            if line.startswith("Inst ")
-        ]
-        self._indicator.set_menu(self.build_menu(lines))
-        updates_count = len(lines)
-        if updates_count:
-            self._indicator.set_label(str(updates_count), str(updates_count))
-        else:
-            self._indicator.set_label("", "")
+        self._indicator.set_label("", "")
+        time.sleep(3)
 
-        # Avoid looping when called with timeout_add_seconds
+        ssh = SSHClient()
+        try:
+            ssh.load_system_host_keys()
+            ssh.set_missing_host_key_policy(AutoAddPolicy())
+            ssh.connect(
+                self._config["ssh"]["ssh_hostname"],
+                username=self._config["ssh"]["ssh_user"],
+            )
+            stdin_, stdout_, stderr_ = ssh.exec_command(
+                "sudo apt-get -q -y --ignore-hold --allow-change-held-packages -s dist-upgrade"
+            )
+            stdout_.channel.recv_exit_status()
+            lines = [
+                re.match(r"Inst (?P<app>\w+) \[(?P<version>[^\]]+)\]", line).groups()
+                for line in stdout_.readlines()
+                if line.startswith("Inst ")
+            ]
+            self._indicator.set_menu(self.build_menu(lines))
+            updates_count = len(lines)
+            if updates_count:
+                self._indicator.set_label(str(updates_count), str(updates_count))
+            else:
+                self._indicator.set_label("", "")
+
+            # Avoid looping when called with timeout_add_seconds
+        except Exception:
+            print("Updating failed, settings locked state")
+            self._indicator.set_icon_full(
+                "openlogo-nd-locked.svg",
+                "Error connecting",
+            )
+            self._indicator.set_label("", "")
+        else:
+            print("Update done")
+            self._indicator.set_icon_full(
+                "openlogo-nd.svg",
+                "Update success",
+            )
+
         return None
 
     def upgrade(self, *args, **kwargs):

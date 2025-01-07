@@ -7,16 +7,16 @@ import subprocess
 import sys
 
 import gi
+from gi.repository import AppIndicator3 as appindicator  # noqa
+from gi.repository import GLib  # noqa
+from gi.repository import Gtk as gtk  # noqa
+from gi.repository import Notify as notify  # noqa
 from paramiko import AutoAddPolicy, SSHClient
 from systemd.journal import JournalHandler
 
 gi.require_version("Notify", "0.7")  # noqa
 gi.require_version("AppIndicator3", "0.1")  # noqa
 
-from gi.repository import AppIndicator3 as appindicator  # noqa
-from gi.repository import GLib  # noqa
-from gi.repository import Gtk as gtk  # noqa
-from gi.repository import Notify as notify  # noqa
 
 APPINDICATOR_ID = "remote-apt-dater"
 
@@ -118,9 +118,13 @@ class App(object):
                 "sudo apt-get -q -y --ignore-hold --allow-change-held-packages -s dist-upgrade"
             )
             stdout_.channel.recv_exit_status()
+            lines = stdout_.readlines()
+            logger.debug(
+                "Response from remote server:\n" + "\n".join([l.strip() for l in lines])
+            )
             available_updates = [
                 re.match(r"Inst (?P<app>\w+) \[(?P<version>[^\]]+)\]", line).groups()
-                for line in stdout_.readlines()
+                for line in lines
                 if line.startswith("Inst ")
             ]
             updates_count = len(available_updates)
@@ -188,5 +192,6 @@ if __name__ == "__main__":
         App(config).main()
 
     except KeyboardInterrupt:
+        logger.info("Shutting down")
         notify.uninit()
         sys.exit(0)

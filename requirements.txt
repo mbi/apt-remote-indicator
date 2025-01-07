@@ -22,3 +22,5 @@ pygobject==3.50.0
     # via -r requirements.in
 pynacl==1.5.0
     # via paramiko
+systemd-python==235
+    # via -r requirements.in

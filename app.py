@@ -26,8 +26,12 @@ logger.setLevel(logging.INFO)
 
 
 class App(object):
-    def __init__(self, config):
-        self._config = config
+    def __init__(self):
+        self._config = configparser.ConfigParser()
+        self._config.read(os.path.join(os.path.dirname(__file__), "config.ini"))
+
+        if self._config["update"].get("ssh_agent_socket"):
+            os.environ["SSH_AUTH_SOCK"] = self._config["update"].get("ssh_agent_socket")
 
         self._indicator = appindicator.Indicator.new_with_path(
             APPINDICATOR_ID,
@@ -40,6 +44,9 @@ class App(object):
         self._ssh_agent_locked = False
         logger.info("Startup complete")
         self._last_update = None
+
+        notify.init(APPINDICATOR_ID)
+        self._notification = None
 
     def build_menu(self, updates=[]):
         menu = gtk.Menu()
@@ -120,7 +127,8 @@ class App(object):
             stdout_.channel.recv_exit_status()
             lines = stdout_.readlines()
             logger.debug(
-                "Response from remote server:\n" + "\n".join([l.strip() for l in lines])
+                "Response from remote server:\n"
+                + "\n".join([line.strip() for line in lines])
             )
             available_updates = [
                 re.match(r"Inst (?P<app>\w+) \[(?P<version>[^\]]+)\]", line).groups()
@@ -128,8 +136,24 @@ class App(object):
                 if line.startswith("Inst ")
             ]
             updates_count = len(available_updates)
+
+            if self._notification:
+                self._notification.close()
+
             if updates_count:
                 self._indicator.set_label(str(updates_count), str(updates_count))
+
+                self._notification = notify.Notification.new(
+                    "Upgrades available",
+                    f"{updates_count} upgrades ready to install",
+                    "sleeping.svg",
+                )
+                self._notification.add_action(
+                    "activate", label="Launch updates", callback=self.upgrade
+                )
+
+                self._notification.show()
+
             else:
                 self._indicator.set_label("", "")
 
@@ -184,12 +208,7 @@ class App(object):
 
 if __name__ == "__main__":
     try:
-        config = configparser.ConfigParser()
-        config.read(os.path.join(os.path.dirname(__file__), "config.ini"))
-
-        if config["update"].get("ssh_agent_socket"):
-            os.environ["SSH_AUTH_SOCK"] = config["update"].get("ssh_agent_socket")
-        App(config).main()
+        App().main()
 
     except KeyboardInterrupt:
         logger.info("Shutting down")

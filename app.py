@@ -114,7 +114,7 @@ class App(object):
     def update(self, *args, **kwargs):
         logger.info("Updating...")
         self._indicator.set_status(appindicator.IndicatorStatus.ATTENTION)
-        # print("Updating")
+
         self._indicator.set_label("", "")
 
         ssh = SSHClient()
@@ -164,7 +164,6 @@ class App(object):
             else:
                 self._indicator.set_label("", "")
 
-            # Avoid looping when called with timeout_add_seconds
         except Exception as e:
             # print("Updating failed, settings locked state")
             self._indicator.set_icon_full(
@@ -191,6 +190,7 @@ class App(object):
 
             logger.info("Update done")
 
+        # Avoid looping when called with timeout_add_seconds
         return None
 
     def upgrade(self, *args, **kwargs):

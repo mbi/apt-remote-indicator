@@ -51,10 +51,16 @@ class App(object):
     def build_menu(self, updates=[]):
         menu = gtk.Menu()
 
-        for app, version in updates:
-            mi = gtk.MenuItem(label=f"{app} {version}")
-            mi.set_sensitive(False)
+        if updates:
+            mi = gtk.MenuItem(label=f"{len(updates)} update(s) pending")
             menu.append(mi)
+            submenu = gtk.Menu()
+            for update in updates:
+                app, version = update
+                smi = gtk.MenuItem(label=f"{app} {version}")
+                smi.set_sensitive(False)
+                submenu.append(smi)
+            mi.set_submenu(submenu)
         else:
             mi = gtk.MenuItem(label="Up to date")
             mi.set_sensitive(False)
@@ -67,15 +73,14 @@ class App(object):
             menu.append(updated_item)
         menu.append(gtk.SeparatorMenuItem.new())
 
+        if updates:
+            item_upgrade = gtk.MenuItem(label="Update now")
+            item_upgrade.connect("activate", self.upgrade)
+            menu.append(item_upgrade)
+
         item_update = gtk.MenuItem(label="Check now")
         item_update.connect("activate", self.update)
         menu.append(item_update)
-
-        if updates:
-            item_upgrade = gtk.MenuItem(label="Upgrade")
-            item_upgrade.connect("activate", self.upgrade)
-            menu.append(item_upgrade)
-            menu.append(gtk.SeparatorMenuItem.new())
 
         if self._ssh_agent_locked:
             item_unlock = gtk.MenuItem(label="Unlock SSH Agent")
@@ -122,7 +127,9 @@ class App(object):
                 username=self._config["ssh"]["ssh_user"],
             )
             stdin_, stdout_, stderr_ = ssh.exec_command(
-                "sudo apt-get -q -y --ignore-hold --allow-change-held-packages -s dist-upgrade"
+                "sudo apt-get update -q -y && "
+                "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
+                "-s dist-upgrade"
             )
             stdout_.channel.recv_exit_status()
             lines = stdout_.readlines()

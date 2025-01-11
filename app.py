@@ -6,12 +6,13 @@ import shlex
 import subprocess
 import sys
 
+from paramiko import AutoAddPolicy, SSHClient
+
 import gi
 from gi.repository import AppIndicator3 as appindicator  # noqa
 from gi.repository import GLib  # noqa
 from gi.repository import Gtk as gtk  # noqa
 from gi.repository import Notify as notify  # noqa
-from paramiko import AutoAddPolicy, SSHClient
 from systemd.journal import JournalHandler
 
 gi.require_version("Notify", "0.7")  # noqa
@@ -138,7 +139,7 @@ class App(object):
                 + "\n".join([line.strip() for line in lines])
             )
             available_updates = [
-                re.match(r"Inst (?P<app>\w+) \[(?P<version>[^\]]+)\]", line).groups()
+                line.strip().split(" ")[1:3]
                 for line in lines
                 if line.startswith("Inst ")
             ]

@@ -2,10 +2,9 @@
 ssh_hosts = username@hostname,username2@hostname2
 
 
-
 [update]
 upgrade_command = kitty -o hide_window_decorations=no /bin/sh -c apt-dater
 unlock_agent_command = kitty -o hide_window_decorations=no /bin/sh -c ssh-add
-update_interval = 120
+update_interval = 1200
 
 # ssh_agent_socket = /run/user/1000/ssh-agent.socket

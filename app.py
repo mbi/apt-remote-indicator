@@ -21,7 +21,7 @@ APPINDICATOR_ID = "remote-apt-dater"
 
 logger = logging.getLogger(APPINDICATOR_ID)
 logger.addHandler(JournalHandler(SYSLOG_IDENTIFIER=APPINDICATOR_ID))
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 class App(object):
@@ -170,8 +170,6 @@ class App(object):
 
             logger.warning("Can't connect: " + str(e))
 
-            raise
-
         else:
             #  print("Update done")
             self._indicator.set_icon_full(
@@ -181,6 +179,13 @@ class App(object):
             self._ssh_agent_locked = False
 
         finally:
+            # Close the ssh connection
+            try:
+                logger.debug("Closing ssh connection")
+                ssh.close()
+            except Exception:
+                pass
+
             updates_count = len(available_updates)
 
             if updates_count:

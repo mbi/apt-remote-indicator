@@ -1,6 +1,7 @@
 [ssh]
-ssh_user = username
-ssh_hostname = hostname
+ssh_hosts = username@hostname,username2@hostname2
+
+
 
 [update]
 upgrade_command = kitty -o hide_window_decorations=no /bin/sh -c apt-dater

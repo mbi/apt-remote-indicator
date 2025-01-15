@@ -1,18 +1,16 @@
 import configparser
 import logging
 import os
-import re
 import shlex
 import subprocess
 import sys
-
-from paramiko import AutoAddPolicy, SSHClient
 
 import gi
 from gi.repository import AppIndicator3 as appindicator  # noqa
 from gi.repository import GLib  # noqa
 from gi.repository import Gtk as gtk  # noqa
 from gi.repository import Notify as notify  # noqa
+from paramiko import AutoAddPolicy, SSHClient
 from systemd.journal import JournalHandler
 
 gi.require_version("Notify", "0.7")  # noqa
@@ -23,7 +21,7 @@ APPINDICATOR_ID = "remote-apt-dater"
 
 logger = logging.getLogger(APPINDICATOR_ID)
 logger.addHandler(JournalHandler(SYSLOG_IDENTIFIER=APPINDICATOR_ID))
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 class App(object):
@@ -118,35 +116,72 @@ class App(object):
 
         self._indicator.set_label("", "")
 
+        if self._notification:
+            self._notification.close()
+
         ssh = SSHClient()
-        available_updates = []
+        available_updates = set()
         try:
             ssh.load_system_host_keys()
             ssh.set_missing_host_key_policy(AutoAddPolicy())
-            ssh.connect(
-                self._config["ssh"]["ssh_hostname"],
-                username=self._config["ssh"]["ssh_user"],
-            )
-            stdin_, stdout_, stderr_ = ssh.exec_command(
-                "sudo apt-get update -q -y && "
-                "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
-                "-s dist-upgrade"
-            )
-            stdout_.channel.recv_exit_status()
-            lines = stdout_.readlines()
-            logger.debug(
-                "Response from remote server:\n"
-                + "\n".join([line.strip() for line in lines])
-            )
-            available_updates = [
-                line.strip().split(" ")[1:3]
-                for line in lines
-                if line.startswith("Inst ")
-            ]
-            updates_count = len(available_updates)
 
-            if self._notification:
-                self._notification.close()
+            for ssh_host in self._config["ssh"]["ssh_hosts"].split(","):
+                username, host = ssh_host.strip().split("@")
+
+                ssh.connect(
+                    host.strip(),
+                    username=username.strip(),
+                )
+                stdin_, stdout_, stderr_ = ssh.exec_command(
+                    "sudo apt-get update -q -y && "
+                    "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
+                    "-s dist-upgrade"
+                )
+                stdout_.channel.recv_exit_status()
+                lines = stdout_.readlines()
+                logger.debug(
+                    f"Response from {host}:\n"
+                    + "\n".join([line.strip() for line in lines])
+                )
+                for pkg, version in [
+                    line.strip().split(" ")[1:3]
+                    for line in lines
+                    if line.startswith("Inst ")
+                ]:
+                    available_updates.add(
+                        (
+                            pkg.strip(),
+                            version.replace("[", "")
+                            .replace("(", "")
+                            .replace("]", "")
+                            .replace(")", "")
+                            .strip(),
+                        )
+                    )
+
+        except Exception as e:
+            # print("Updating failed, settings locked state")
+            self._indicator.set_icon_full(
+                "locked.svg",
+                "Error connecting",
+            )
+            self._indicator.set_label("", "")
+            self._ssh_agent_locked = True
+
+            logger.warning("Can't connect: " + str(e))
+
+            raise
+
+        else:
+            #  print("Update done")
+            self._indicator.set_icon_full(
+                "sleeping.svg",
+                "Update success",
+            )
+            self._ssh_agent_locked = False
+
+        finally:
+            updates_count = len(available_updates)
 
             if updates_count:
                 self._indicator.set_label(str(updates_count), str(updates_count))
@@ -165,29 +200,9 @@ class App(object):
             else:
                 self._indicator.set_label("", "")
 
-        except Exception as e:
-            # print("Updating failed, settings locked state")
-            self._indicator.set_icon_full(
-                "locked.svg",
-                "Error connecting",
-            )
-            self._indicator.set_label("", "")
-            self._ssh_agent_locked = True
-
-            logger.warning("Can't connect: " + str(e))
-
-        else:
-            #  print("Update done")
-            self._indicator.set_icon_full(
-                "sleeping.svg",
-                "Update success",
-            )
-            self._ssh_agent_locked = False
-
-        finally:
             self._last_update = GLib.DateTime.new_now_local()
             self._indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
-            self._indicator.set_menu(self.build_menu(available_updates))
+            self._indicator.set_menu(self.build_menu(set(available_updates)))
 
             logger.info("Update done")
 

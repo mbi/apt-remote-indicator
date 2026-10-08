@@ -128,30 +128,36 @@ class App:
         if self._notification:
             self._notification.close()
 
-        ssh = SSHClient()
+        ssh_hosts = self._config["ssh"]["ssh_hosts"].split(",")
         available_updates = set()
-        try:
-            ssh.load_system_host_keys()
-            ssh.set_missing_host_key_policy(AutoAddPolicy())
+        failed_hosts = 0
 
-            for ssh_host in self._config["ssh"]["ssh_hosts"].split(","):
-                username, host = ssh_host.strip().split("@")
-                host = host.strip()
+        for ssh_host in ssh_hosts:
+            username, host = ssh_host.strip().split("@")
+            host = host.strip()
 
-                resolved = (
-                    self._ssh_config.lookup(host).get("hostname")
-                    if self._ssh_config
-                    else None
-                )
-                if resolved and resolved != host:
-                    logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
-                    host = resolved
+            resolved = (
+                self._ssh_config.lookup(host).get("hostname")
+                if self._ssh_config
+                else None
+            )
+            if resolved and resolved != host:
+                logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
+                host = resolved
+
+            ssh = SSHClient()
+            try:
+                ssh.load_system_host_keys()
+                ssh.set_missing_host_key_policy(AutoAddPolicy())
 
                 logger.debug(f"Connecting to {username}@{host}")
 
                 ssh.connect(
                     host,
                     username=username.strip(),
+                    timeout=5,
+                    banner_timeout=5,
+                    auth_timeout=5,
                 )
                 _, stdout_, _ = ssh.exec_command(
                     "sudo apt-get update -q -y && "
@@ -180,57 +186,56 @@ class App:
                         )
                     )
 
-        except Exception as e:  # noqa: BLE001
-            # print("Updating failed, settings locked state")
+            except Exception as e:  # noqa: BLE001
+                failed_hosts += 1
+                logger.warning(f"Can't connect to {username}@{host}: {e}")
+            finally:
+                try:
+                    logger.debug("Closing ssh connection")
+                    ssh.close()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+        if failed_hosts == len(ssh_hosts):
+            # Everything failed: locked state, offer SSH agent unlock.
+            logger.warning("Can't connect to any host")
             self._indicator.set_icon_full(
                 "locked.svg",
                 "Error connecting",
             )
             self._indicator.set_label("", "")
             self._ssh_agent_locked = True
-
-            logger.warning("Can't connect: " + str(e))
-
         else:
-            #  print("Update done")
             self._indicator.set_icon_full(
                 "sleeping.svg",
                 "Update success",
             )
             self._ssh_agent_locked = False
 
-        finally:
-            # Close the ssh connection
-            try:
-                logger.debug("Closing ssh connection")
-                ssh.close()
-            except Exception:  # noqa: BLE001, S110
-                pass
+        updates_count = len(available_updates)
 
-            updates_count = len(available_updates)
+        if updates_count:
+            self._indicator.set_label(str(updates_count), str(updates_count))
 
-            if updates_count:
-                self._indicator.set_label(str(updates_count), str(updates_count))
+            self._notification = notify.Notification.new(
+                "Upgrades available",
+                f"{updates_count} upgrades ready to install",
+                "sleeping.svg",
+            )
+            self._notification.add_action(
+                "activate", label="Launch updates", callback=self.upgrade
+            )
 
-                self._notification = notify.Notification.new(
-                    "Upgrades available",
-                    f"{updates_count} upgrades ready to install",
-                    "sleeping.svg",
-                )
-                self._notification.add_action(
-                    "activate", label="Launch updates", callback=self.upgrade
-                )
+            self._notification.show()
 
-                self._notification.show()
+        else:
+            self._indicator.set_label("", "")
 
-            else:
-                self._indicator.set_label("", "")
+        self._last_update = GLib.DateTime.new_now_local()
+        self._indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+        self._indicator.set_menu(self.build_menu(set(available_updates)))
 
-            self._last_update = GLib.DateTime.new_now_local()
-            self._indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
-            self._indicator.set_menu(self.build_menu(set(available_updates)))
-
-            logger.info("Update done")
+        logger.info("Update done")
 
         # Avoid looping when called with timeout_add_seconds
 

@@ -1,3 +1,4 @@
+import argparse
 import configparser
 import logging
 import os
@@ -6,15 +7,15 @@ import subprocess
 import sys
 
 import gi
-from gi.repository import AppIndicator3 as appindicator  # noqa
-from gi.repository import GLib  # noqa
-from gi.repository import Gtk as gtk  # noqa
-from gi.repository import Notify as notify  # noqa
-from paramiko import AutoAddPolicy, SSHClient
+from gi.repository import AppIndicator3 as appindicator
+from gi.repository import GLib
+from gi.repository import Gtk as gtk
+from gi.repository import Notify as notify
+from paramiko import AutoAddPolicy, SSHClient, SSHConfig
 from systemd.journal import JournalHandler
 
-gi.require_version("Notify", "0.7")  # noqa
-gi.require_version("AppIndicator3", "0.1")  # noqa
+gi.require_version("Notify", "0.7")
+gi.require_version("AppIndicator3", "0.1")
 
 
 APPINDICATOR_ID = "remote-apt-dater"
@@ -24,13 +25,19 @@ logger.addHandler(JournalHandler(SYSLOG_IDENTIFIER=APPINDICATOR_ID))
 logger.setLevel(logging.INFO)
 
 
-class App(object):
+class App:
     def __init__(self):
         self._config = configparser.ConfigParser()
         self._config.read(os.path.join(os.path.dirname(__file__), "config.ini"))
 
         if self._config["update"].get("ssh_agent_socket"):
             os.environ["SSH_AUTH_SOCK"] = self._config["update"].get("ssh_agent_socket")
+
+        try:
+            self._ssh_config = SSHConfig.from_path(os.path.expanduser("~/.ssh/config"))
+        except FileNotFoundError:
+            self._ssh_config = None
+            logger.warning("No ~/.ssh/config found; connecting to hosts as given")
 
         self._indicator = appindicator.Indicator.new_with_path(
             APPINDICATOR_ID,
@@ -47,7 +54,9 @@ class App(object):
         notify.init(APPINDICATOR_ID)
         self._notification = None
 
-    def build_menu(self, updates=[]):
+    def build_menu(self, updates=None):
+        if updates is None:
+            updates = []
         menu = gtk.Menu()
 
         if updates:
@@ -127,12 +136,24 @@ class App(object):
 
             for ssh_host in self._config["ssh"]["ssh_hosts"].split(","):
                 username, host = ssh_host.strip().split("@")
+                host = host.strip()
+
+                resolved = (
+                    self._ssh_config.lookup(host).get("hostname")
+                    if self._ssh_config
+                    else None
+                )
+                if resolved and resolved != host:
+                    logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
+                    host = resolved
+
+                logger.debug(f"Connecting to {username}@{host}")
 
                 ssh.connect(
-                    host.strip(),
+                    host,
                     username=username.strip(),
                 )
-                stdin_, stdout_, stderr_ = ssh.exec_command(
+                _, stdout_, _ = ssh.exec_command(
                     "sudo apt-get update -q -y && "
                     "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
                     "-s dist-upgrade"
@@ -159,7 +180,7 @@ class App(object):
                         )
                     )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # print("Updating failed, settings locked state")
             self._indicator.set_icon_full(
                 "locked.svg",
@@ -183,7 +204,7 @@ class App(object):
             try:
                 logger.debug("Closing ssh connection")
                 ssh.close()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
             updates_count = len(available_updates)
@@ -212,7 +233,6 @@ class App(object):
             logger.info("Update done")
 
         # Avoid looping when called with timeout_add_seconds
-        return None
 
     def upgrade(self, *args, **kwargs):
         logger.info("Running upgrade")
@@ -220,7 +240,7 @@ class App(object):
             shlex.split(self._config["update"]["upgrade_command"], posix=False)
         )
         try:
-            outs, errs = proc.communicate()
+            _outs, _errs = proc.communicate()
         finally:
             GLib.timeout_add_seconds(1, self.update)
 
@@ -229,12 +249,24 @@ class App(object):
         logger.info("Running unlock command:" + str(cmd))
         proc = subprocess.Popen(cmd)
         try:
-            outs, errs = proc.communicate()
+            _outs, _errs = proc.communicate()
         finally:
             GLib.timeout_add_seconds(1, self.update)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="AppIndicator tray applet polling remote hosts for pending apt upgrades"
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="set logging level to DEBUG (raw apt responses, SSH lifecycle)",
+    )
+    args = parser.parse_args()
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+
     try:
         App().main()
 

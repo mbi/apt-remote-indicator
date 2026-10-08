@@ -5,6 +5,8 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import gi
 from gi.repository import AppIndicator3 as appindicator
@@ -50,6 +52,7 @@ class App:
         self._ssh_agent_locked = False
         logger.info("Startup complete")
         self._last_update = None
+        self._polling = False
 
         notify.init(APPINDICATOR_ID)
         self._notification = None
@@ -75,7 +78,9 @@ class App:
             menu.append(mi)
 
         if self._last_update:
-            updated_time = GLib.DateTime.format(self._last_update, "%c")
+            updated_time = GLib.DateTime.format(
+                self._last_update, "%-m/%-d/%Y %-I:%M %p"
+            )
             updated_item = gtk.MenuItem(label=f"Last checked {updated_time}")
             updated_item.set_sensitive(False)
             menu.append(updated_item)
@@ -129,74 +134,101 @@ class App:
             self._notification.close()
 
         ssh_hosts = self._config["ssh"]["ssh_hosts"].split(",")
+        self._polling = True
+
+        def poll_all():
+            try:
+                with ThreadPoolExecutor(max_workers=max(1, len(ssh_hosts))) as pool:
+                    results = list(pool.map(self._poll_host, ssh_hosts))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Polling failed: {e}")
+                results = [(set(), False)] * len(ssh_hosts)
+            GLib.idle_add(self._apply_results, results)
+
+        threading.Thread(target=poll_all, daemon=True).start()
+
+    def _poll_host(self, ssh_host):
+        """Poll one host off the main thread.
+
+        Returns (set of (pkg, version), ok: bool); ok is False on any
+        connection/exec failure. Must not touch GTK/AppIndicator/Notify.
+        """
+        available_updates = set()
+        username, host = ssh_host.strip().split("@")
+        host = host.strip()
+
+        resolved = (
+            self._ssh_config.lookup(host).get("hostname")
+            if self._ssh_config
+            else None
+        )
+        if resolved and resolved != host:
+            logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
+            host = resolved
+
+        ssh = SSHClient()
+        try:
+            ssh.load_system_host_keys()
+            ssh.set_missing_host_key_policy(AutoAddPolicy())
+
+            logger.debug(f"Connecting to {username}@{host}")
+
+            ssh.connect(
+                host,
+                username=username.strip(),
+                timeout=5,
+                banner_timeout=5,
+                auth_timeout=5,
+            )
+            _, stdout_, _ = ssh.exec_command(
+                "sudo apt-get update -q -y && "
+                "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
+                "-s dist-upgrade"
+            )
+            stdout_.channel.recv_exit_status()
+            lines = stdout_.readlines()
+            logger.debug(
+                f"Response from {host}:\n"
+                + "\n".join([line.strip() for line in lines])
+            )
+            for pkg, version in [
+                line.strip().split(" ")[1:3]
+                for line in lines
+                if line.startswith("Inst ")
+            ]:
+                available_updates.add(
+                    (
+                        pkg.strip(),
+                        version.replace("[", "")
+                        .replace("(", "")
+                        .replace("]", "")
+                        .replace(")", "")
+                        .strip(),
+                    )
+                )
+            return available_updates, True
+
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Can't connect to {username}@{host}: {e}")
+            return available_updates, False
+        finally:
+            try:
+                logger.debug("Closing ssh connection")
+                ssh.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    def _apply_results(self, results):
+        """Apply poll results on the main thread (GTK is not thread-safe)."""
+        self._polling = False
         available_updates = set()
         failed_hosts = 0
-
-        for ssh_host in ssh_hosts:
-            username, host = ssh_host.strip().split("@")
-            host = host.strip()
-
-            resolved = (
-                self._ssh_config.lookup(host).get("hostname")
-                if self._ssh_config
-                else None
-            )
-            if resolved and resolved != host:
-                logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
-                host = resolved
-
-            ssh = SSHClient()
-            try:
-                ssh.load_system_host_keys()
-                ssh.set_missing_host_key_policy(AutoAddPolicy())
-
-                logger.debug(f"Connecting to {username}@{host}")
-
-                ssh.connect(
-                    host,
-                    username=username.strip(),
-                    timeout=5,
-                    banner_timeout=5,
-                    auth_timeout=5,
-                )
-                _, stdout_, _ = ssh.exec_command(
-                    "sudo apt-get update -q -y && "
-                    "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
-                    "-s dist-upgrade"
-                )
-                stdout_.channel.recv_exit_status()
-                lines = stdout_.readlines()
-                logger.debug(
-                    f"Response from {host}:\n"
-                    + "\n".join([line.strip() for line in lines])
-                )
-                for pkg, version in [
-                    line.strip().split(" ")[1:3]
-                    for line in lines
-                    if line.startswith("Inst ")
-                ]:
-                    available_updates.add(
-                        (
-                            pkg.strip(),
-                            version.replace("[", "")
-                            .replace("(", "")
-                            .replace("]", "")
-                            .replace(")", "")
-                            .strip(),
-                        )
-                    )
-
-            except Exception as e:  # noqa: BLE001
+        for updates, ok in results:
+            available_updates |= updates
+            if not ok:
                 failed_hosts += 1
-                logger.warning(f"Can't connect to {username}@{host}: {e}")
-            finally:
-                try:
-                    logger.debug("Closing ssh connection")
-                    ssh.close()
-                except Exception:  # noqa: BLE001, S110
-                    pass
 
-        if failed_hosts == len(ssh_hosts):
+        if failed_hosts == len(results):
             # Everything failed: locked state, offer SSH agent unlock.
             logger.warning("Can't connect to any host")
             self._indicator.set_icon_full(

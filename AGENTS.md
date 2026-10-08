@@ -4,27 +4,27 @@
 Single-file Python 3 GNOME tray applet (`app.py`, AppIndicator id `remote-apt-dater`) that periodically SSHes into configured Debian hosts, runs `sudo apt-get update` plus a **simulated** `apt-get dist-upgrade` (`-s` — it never changes remote packages), parses apt's `Inst <pkg> <version>` lines, and surfaces pending upgrades in the tray: icon label with count, a menu listing each pending package, a desktop notification, and an "Update now" action that launches a locally configured upgrade command.
 
 ## Architecture & Data Flow
-One class `App`, no module-level functions beyond the `__main__` guard. Event model is entirely the GLib/GTK main loop; all blocking work (paramiko SSH, subprocess) runs on the **main thread** — there is no threading or async.
+One class `App`, no module-level functions beyond the `__main__` guard. Event model is entirely the GLib/GTK main loop. SSH polls run off the main thread: `update()` spawns one daemon coordinator thread that fans out per-host `_poll_host` calls through a `ThreadPoolExecutor` (one worker per configured host), then hands results back with `GLib.idle_add(self._apply_results, results)`. All GTK/AppIndicator/Notify calls stay on the main thread (`_apply_results`); `_poll_host` must never touch them. A `self._polling` guard makes re-entrant `update()` calls (e.g. mashing "Check now") no-ops. Other blocking work (`subprocess` in `upgrade`/`unlock_agent`) still runs on the main thread.
 
 ```mermaid
 flowchart LR
   A[config.ini] --> B["App.__init__"]
   T["GLib timeouts<br>(2s initial, then update_interval)"] --> U["App.update"]
-  U -->|paramiko per ssh_hosts entry| S["remote: apt-get update<br>+ -s dist-upgrade"]
+  U -->|thread pool, paramiko per ssh_hosts entry| S["remote: apt-get update<br>+ -s dist-upgrade"]
   S -->|parse 'Inst ' lines| P[set of (pkg, version)]
-  P --> UI["icon / label / menu / notification"]
+  P -->|GLib.idle_add| UI["icon / label / menu / notification<br>(main thread, _apply_results)"]
   M["Update now / notification action"] --> C["Popen upgrade_command"] --> U
   L["Unlock SSH Agent"] --> X["Popen unlock_agent_command"] --> U
 ```
 
 - **State machine via tray icons**: `sleeping.svg` = idle/up-to-date (default ACTIVE icon, restored after a successful poll); `updating.svg` = attention icon shown while a poll runs (`set_attention_icon_full` + `IndicatorStatus.ATTENTION`); `locked.svg` = `set_icon_full` when the SSH poll raises (connection/auth failure, e.g. locked ssh-agent) — sets `_ssh_agent_locked` and adds an "Unlock SSH Agent" menu item.
-- **Callback chaining quirk**: `update()` returns `None` (a directly scheduled timeout fires once); `update_loop()` returns `True` so the interval timer recurs; code paths after Popen reschedule with `GLib.timeout_add_seconds(1, self.update)`. Any new timeout-driven caller MUST respect this single-fire convention.
+- **Callback chaining quirk**: `update()` returns `None` (a directly scheduled timeout fires once); `update_loop()` returns `True` so the interval timer recurs; code paths after Popen reschedule with `GLib.timeout_add_seconds(1, self.update)`. Any new timeout-driven caller MUST respect this single-fire convention. A poll in flight sets `_polling` until `_apply_results` runs; `update()` returns immediately if it is set.
 - **Menu rebuilds from scratch** on every poll (`build_menu(set(available_updates))`); no incremental widget updates. Upgrade action comes from the notification callback (`notify` activate) or the menu.
 - **Config consumed** (see `config.ini.sample`): `[ssh] ssh_hosts` (comma-separated `user@host`; split on `","` then exactly one `"@"` per entry), `[update] update_interval` (int seconds), `upgrade_command`, `unlock_agent_command`, optional `ssh_agent_socket` (exported as `SSH_AUTH_SOCK` before connecting).
 
 ## Key Directories
 Flat repository, no package structure — everything lives in the root:
-- `app.py` — entire application (~244 lines)
+- `app.py` — entire application (~313 lines)
 - `sleeping.svg`, `updating.svg`, `locked.svg` — tray state icons (resolved relative to the script directory via `Indicator.new_with_path`)
 - `.venv/` — local Python 3.11.9 pyenv venv (gitignored)
 
@@ -48,7 +48,7 @@ No lint, test, or packaging commands exist.
 ## Important Files
 | File | Role |
 |---|---|
-| `app.py` | Entire source: `App.__init__` → `build_menu` → `main` (timers) → `update` (SSH poll) → `upgrade`/`unlock_agent` (Popen) |
+|`app.py`|Entire source: `App.__init__` → `build_menu` → `main` (timers) → `update` (spawns thread pool) → `_poll_host` (per-host SSH, worker thread) → `_apply_results` (main-thread UI) → `upgrade`/`unlock_agent` (Popen)|
 | `config.ini.sample` | Tracked config template; the contract for all config keys |
 | `config.ini` | Live config — gitignored, per-deployment |
 | `pyproject.toml` | Direct deps only (bare `>=` lower bounds, no hashes): PyGObject, paramiko, systemd-python |

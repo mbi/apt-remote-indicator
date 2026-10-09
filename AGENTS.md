@@ -23,26 +23,28 @@ flowchart LR
 - **Config consumed** (see `config.ini.sample`): `[ssh] ssh_hosts` (comma-separated `user@host`; split on `","` then exactly one `"@"` per entry), `[update] update_interval` (int seconds), `upgrade_command`, `unlock_agent_command`, optional `ssh_agent_socket` (exported as `SSH_AUTH_SOCK` before connecting).
 
 ## Key Directories
-Flat repository, no package structure — everything lives in the root:
-- `app.py` — entire application (~313 lines)
+Flat repository, no package structure:
+- `app.py` — entire application (~310 lines)
 - `sleeping.svg`, `updating.svg`, `locked.svg` — tray state icons (resolved relative to the script directory via `Indicator.new_with_path`)
-- `.venv/` — local Python 3.11.9 pyenv venv (gitignored)
+- `tests/` — pytest suite (headless: stubs GTK/Notify, no network/display)
+- `.venv/` — local uv-managed Python venv (gitignored)
 
 ## Development Commands
 ```sh
 .venv/bin/python app.py                      # run the applet (icons + config resolved from script dir)
+uv run pytest                                # run the test suite (dev deps in [dependency-groups])
 uv lock                                      # regenerate uv.lock (resolves from pyproject.toml)
 uv sync                                      # sync .venv to uv.lock (also prunes extraneous packages)
 cp config.ini.sample config.ini              # create local config, then edit (config.ini is gitignored)
 ```
-No lint, test, or packaging commands exist.
+No lint or packaging commands exist. `ruff` is an IDE-level preference only.
 
 ## Code Conventions & Common Patterns
 - **Config**: `configparser` reading `config.ini` from `os.path.dirname(__file__)`; never track or commit `config.ini` (contains real hostnames).
 - **External commands from config**: `shlex.split(cmd, posix=False)` for `upgrade_command` (intentional — handles kitty-style quoting), `posix=True` for `unlock_agent_command`; both launched via `subprocess.Popen(...)` + `communicate()`. Handler methods on menu callbacks accept `*args, **kwargs` and MUST NOT return a truthy value or the timeout will re-fire.
 - **Logging**: module logger `logging.getLogger(APPINDICATOR_ID)` with `systemd.journal.JournalHandler(SYSLOG_IDENTIFIER=remote-apt-dater)`, level INFO (DEBUG for raw apt responses). View with `journalctl --identifier=remote-apt-dater -f`.
 - **Error handling**: the SSH poll uses one broad `except Exception` → locked state + warning log; `ssh.close()` sits in a `finally` guarded by a bare `except: pass`. Follow this pattern for new remote operations rather than introducing per-exception menus.
-- **gi (PyGObject)**: `gi.require_version("AppIndicator3", "0.1")` / `("Notify", "0.7")` at import time; GTK menu built with `Gtk.Menu`/`Gtk.MenuItem`, callbacks via `item.connect("activate", self.<method>)`; state stored on `self._*` instance attributes (`_config`, `_indicator`, `_notification`, `_last_update`, `_ssh_agent_locked`).
+- **gi (PyGObject)**: `gi.require_version("Notify", "0.7")` / `("AppIndicator3", "0.1")` MUST stay ahead of the `gi.repository` imports — requesting a version after the typelib is loaded is a no-op and makes PyGObject emit `PyGIWarning` and pick a default version; GTK menu built with `Gtk.Menu`/`Gtk.MenuItem`, callbacks via `item.connect("activate", self.<method>)`; state stored on `self._*` instance attributes (`_config`, `_indicator`, `_notification`, `_last_update`, `_ssh_agent_locked`).
 - **Updates collection**: set of `(pkg, old, new)` tuples captured by module-level `INST_LINE_RE` from `Inst ` lines of the simulated dist-upgrade output (`old`/`installed` version is optional in apt's format); menu rows render `pkg old → new` (arch-update style, plain text only — AppIndicator/DBusMenu menus cannot carry styling or right-aligned columns); header reads `N updates pending`; the "Last checked" item formats `%-m/%-d/%Y %-I:%M %p`.
 
 ## Important Files
@@ -53,13 +55,18 @@ No lint, test, or packaging commands exist.
 | `config.ini` | Live config — gitignored, per-deployment |
 | `pyproject.toml` | Direct deps only (bare `>=` lower bounds, no hashes): PyGObject, paramiko, systemd-python |
 | `uv.lock` | Exact-pinned lockfile incl. transitive deps (tracked in git) |
+| `tests/` | Pytest suite + `conftest.py` stubs (headless; run with `uv run pytest`) |
 | `sleeping.svg` / `updating.svg` / `locked.svg` | Tray icon states |
 
 ## Runtime/Tooling Preferences
-- **Python 3.11** (pyenv 3.11.9, venv at `.venv`); run from the repository root — the app resolves `config.ini` and icons relative to `app.py`'s directory, so it does not need to be installed and there is no packaging metadata (not installable).
+- **Python 3.14** (`requires-python = ">=3.14"` in `pyproject.toml`; venv at `.venv`, managed by uv); run from the repository root — the app resolves `config.ini` and icons relative to `app.py`'s directory, so it does not need to be installed and there is no packaging metadata (not installable).
 - **uv** dependency workflow: deps are managed in `pyproject.toml` (direct deps as loose `>=` lower bounds) + `uv.lock` (exact pins, tracked in git). Changing a dep: edit `pyproject.toml`, then `uv lock` and `uv sync`. Never edit `uv.lock` by hand.
 - **System prerequisites**: AppIndicator3/`libnotify` typelib files, ssh-agent, journald. Deps beyond PyGObject/paramiko/systemd-python are transitive only.
 - Ruff format/check on save is an IDE-level preference (`.idea/`); no repo-level lint config exists.
 
 ## Testing & QA
-No tests, test framework, CI, or QA dependencies exist anywhere (the `.venv/.../pudb/test/` directory is third-party pudb's bundled suite, not this project's). Changes are verified by running `python app.py` and exercising the tray; keep this single-file/no-tooling setup unless the user explicitly asks for tests or lint setup.
+Pytest suite in `tests/` (dev dependency via `[dependency-groups]` in `pyproject.toml`; run with `uv run pytest` or `.venv/bin/python -m pytest`). It is **headless**: `tests/conftest.py` stubs `gtk` and `notify` on the `app` module and builds `App` instances through `App.__new__` + hand-set attributes, so `__init__` (AppIndicator/notify/config.ini) is never exercised. No display, session bus, SSH, or network access is required.
+
+Coverage: `INST_LINE_RE` parsing; `_poll_host` (update parsing, `~/.ssh/config` hostname substitution, connect timeouts, failure isolation, client always closed); `_apply_results` (all-hosts-failed → locked state, partial failure → success, dedupe/merge across hosts, notification, `_polling` reset); `build_menu` (row text `pkg old → new`, pluralized header, `Last checked M/D/Y H:MM AM|PM`, conditional items, action wiring); `update()`/`update_loop()` (daemon-thread handoff, `GLib.idle_add` application, `ThreadPoolExecutor` failure fallback, timer recurrence contract).
+
+New behavior belongs in a test here when it is consumer-visible (tray state, menu text, notification, config contract). Don't add tests that pin incidental strings or wiring-for-wiring's-sake; prefer one focused test per decision (see the mutation-checked date/row-format tests).

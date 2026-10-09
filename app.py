@@ -10,16 +10,19 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import gi
+
+# MUST run before the gi.repository imports below: a typelib version has to be
+# requested before the namespace is loaded, otherwise PyGObject falls back to a
+# default version and warns (PyGIWarning).
+gi.require_version("Notify", "0.7")
+gi.require_version("AppIndicator3", "0.1")
+
 from gi.repository import AppIndicator3 as appindicator
 from gi.repository import GLib
 from gi.repository import Gtk as gtk
 from gi.repository import Notify as notify
 from paramiko import AutoAddPolicy, SSHClient, SSHConfig
 from systemd.journal import JournalHandler
-
-gi.require_version("Notify", "0.7")
-gi.require_version("AppIndicator3", "0.1")
-
 
 APPINDICATOR_ID = "remote-apt-dater"
 

@@ -12,3 +12,13 @@ dependencies = [
 [tool.uv]
 # Plain script project: never build/install the project itself, only its deps.
 package = false
+
+[tool.pytest.ini_options]
+# `app.py` lives at the repo root, not in a package.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

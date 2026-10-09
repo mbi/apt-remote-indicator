@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Overview
-Single-file Python 3 GNOME tray applet (`app.py`, AppIndicator id `remote-apt-dater`) that periodically SSHes into configured Debian hosts, runs `sudo apt-get update` plus a **simulated** `apt-get dist-upgrade` (`-s` — it never changes remote packages), parses apt's `Inst <pkg> <version>` lines, and surfaces pending upgrades in the tray: icon label with count, a menu listing each pending package, a desktop notification, and an "Update now" action that launches a locally configured upgrade command.
+Single-file Python 3 GNOME tray applet (`app.py`, AppIndicator id `remote-apt-dater`) that periodically SSHes into configured Debian hosts, runs `sudo apt-get update` plus a **simulated** `apt-get dist-upgrade` (`-s` — it never changes remote packages), parses apt's `Inst <pkg> [<installed>] (<candidate>)` lines, and surfaces pending upgrades in the tray: icon label with count, a menu listing each pending package, a desktop notification, and an "Update now" action that launches a locally configured upgrade command.
 
 ## Architecture & Data Flow
 One class `App`, no module-level functions beyond the `__main__` guard. Event model is entirely the GLib/GTK main loop. SSH polls run off the main thread: `update()` spawns one daemon coordinator thread that fans out per-host `_poll_host` calls through a `ThreadPoolExecutor` (one worker per configured host), then hands results back with `GLib.idle_add(self._apply_results, results)`. All GTK/AppIndicator/Notify calls stay on the main thread (`_apply_results`); `_poll_host` must never touch them. A `self._polling` guard makes re-entrant `update()` calls (e.g. mashing "Check now") no-ops. Other blocking work (`subprocess` in `upgrade`/`unlock_agent`) still runs on the main thread.
@@ -11,7 +11,7 @@ flowchart LR
   A[config.ini] --> B["App.__init__"]
   T["GLib timeouts<br>(2s initial, then update_interval)"] --> U["App.update"]
   U -->|thread pool, paramiko per ssh_hosts entry| S["remote: apt-get update<br>+ -s dist-upgrade"]
-  S -->|parse 'Inst ' lines| P[set of (pkg, version)]
+  S -->|parse 'Inst ' lines| P[set of (pkg, old, new)]
   P -->|GLib.idle_add| UI["icon / label / menu / notification<br>(main thread, _apply_results)"]
   M["Update now / notification action"] --> C["Popen upgrade_command"] --> U
   L["Unlock SSH Agent"] --> X["Popen unlock_agent_command"] --> U
@@ -43,7 +43,7 @@ No lint, test, or packaging commands exist.
 - **Logging**: module logger `logging.getLogger(APPINDICATOR_ID)` with `systemd.journal.JournalHandler(SYSLOG_IDENTIFIER=remote-apt-dater)`, level INFO (DEBUG for raw apt responses). View with `journalctl --identifier=remote-apt-dater -f`.
 - **Error handling**: the SSH poll uses one broad `except Exception` → locked state + warning log; `ssh.close()` sits in a `finally` guarded by a bare `except: pass`. Follow this pattern for new remote operations rather than introducing per-exception menus.
 - **gi (PyGObject)**: `gi.require_version("AppIndicator3", "0.1")` / `("Notify", "0.7")` at import time; GTK menu built with `Gtk.Menu`/`Gtk.MenuItem`, callbacks via `item.connect("activate", self.<method>)`; state stored on `self._*` instance attributes (`_config`, `_indicator`, `_notification`, `_last_update`, `_ssh_agent_locked`).
-- **Updates collection**: set of `(pkg, version)` tuples built from `Inst ` lines of the simulated dist-upgrade output; version strings stripped of `[( )]` brackets; label shows the count.
+- **Updates collection**: set of `(pkg, old, new)` tuples captured by module-level `INST_LINE_RE` from `Inst ` lines of the simulated dist-upgrade output (`old`/`installed` version is optional in apt's format); menu rows render `pkg old → new` (arch-update style, plain text only — AppIndicator/DBusMenu menus cannot carry styling or right-aligned columns); header reads `N updates pending`; the "Last checked" item formats `%-m/%-d/%Y %-I:%M %p`.
 
 ## Important Files
 | File | Role |

@@ -2,7 +2,7 @@
 name = "apt-remote-indicator"
 version = "0.1.0"
 description = "GNOME tray applet polling remote hosts over SSH for pending apt upgrades"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "pygobject",
     "paramiko",

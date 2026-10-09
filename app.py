@@ -2,6 +2,7 @@ import argparse
 import configparser
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -21,6 +22,9 @@ gi.require_version("AppIndicator3", "0.1")
 
 
 APPINDICATOR_ID = "remote-apt-dater"
+
+# Simulated dist-upgrade line: "Inst <pkg> [<installed>] (<candidate>, <origin> ...)"
+INST_LINE_RE = re.compile(r"^Inst\s+(\S+)(?:\s+\[([^\]]*)\])?\s+\(([^),\s]+)")
 
 logger = logging.getLogger(APPINDICATOR_ID)
 logger.addHandler(JournalHandler(SYSLOG_IDENTIFIER=APPINDICATOR_ID))
@@ -63,12 +67,15 @@ class App:
         menu = gtk.Menu()
 
         if updates:
-            mi = gtk.MenuItem(label=f"{len(updates)} update(s) pending")
+            count = len(updates)
+            mi = gtk.MenuItem(
+                label=f"{count} update{'s' if count != 1 else ''} pending"
+            )
             menu.append(mi)
             submenu = gtk.Menu()
-            for update in updates:
-                app, version = update
-                smi = gtk.MenuItem(label=f"{app} {version}")
+            for pkg, old, new in updates:
+                versions = f"{old} → {new}" if old else new
+                smi = gtk.MenuItem(label=f"{pkg} {versions}")
                 smi.set_sensitive(False)
                 submenu.append(smi)
             mi.set_submenu(submenu)
@@ -158,9 +165,7 @@ class App:
         host = host.strip()
 
         resolved = (
-            self._ssh_config.lookup(host).get("hostname")
-            if self._ssh_config
-            else None
+            self._ssh_config.lookup(host).get("hostname") if self._ssh_config else None
         )
         if resolved and resolved != host:
             logger.debug(f"{host} -> {resolved} via ~/.ssh/config")
@@ -188,24 +193,15 @@ class App:
             stdout_.channel.recv_exit_status()
             lines = stdout_.readlines()
             logger.debug(
-                f"Response from {host}:\n"
-                + "\n".join([line.strip() for line in lines])
+                f"Response from {host}:\n" + "\n".join([line.strip() for line in lines])
             )
-            for pkg, version in [
-                line.strip().split(" ")[1:3]
+            for match in (
+                INST_LINE_RE.match(line.strip())
                 for line in lines
                 if line.startswith("Inst ")
-            ]:
-                available_updates.add(
-                    (
-                        pkg.strip(),
-                        version.replace("[", "")
-                        .replace("(", "")
-                        .replace("]", "")
-                        .replace(")", "")
-                        .strip(),
-                    )
-                )
+            ):
+                if match:
+                    available_updates.add(match.groups())
             return available_updates, True
 
         except Exception as e:  # noqa: BLE001

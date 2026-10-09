@@ -1,11 +1,13 @@
 import argparse
 import configparser
+import fcntl
 import logging
 import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -32,6 +34,23 @@ INST_LINE_RE = re.compile(r"^Inst\s+(\S+)(?:\s+\[([^\]]*)\])?\s+\(([^),\s]+)")
 logger = logging.getLogger(APPINDICATOR_ID)
 logger.addHandler(JournalHandler(SYSLOG_IDENTIFIER=APPINDICATOR_ID))
 logger.setLevel(logging.INFO)
+
+LOCK_FILE = APPINDICATOR_ID + ".lock"
+
+
+def acquire_instance_lock():
+    """Return an fd holding an exclusive instance lock, or None if one is held.
+
+    flock releases when the process exits, so there are no stale locks to clean up.
+    """
+    directory = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+    fd = os.open(os.path.join(directory, LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
 
 
 class App:
@@ -302,6 +321,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
+
+    lock_fd = acquire_instance_lock()
+    if lock_fd is None:
+        logger.error("Another instance is already running; exiting")
+        print("remote-apt-dater: another instance is already running", file=sys.stderr)
+        sys.exit(1)
 
     try:
         App().main()

@@ -20,7 +20,7 @@ gi.require_version("Notify", "0.7")
 gi.require_version("AppIndicator3", "0.1")
 
 from gi.repository import AppIndicator3 as appindicator
-from gi.repository import GLib
+from gi.repository import Gio, GLib
 from gi.repository import Gtk as gtk
 from gi.repository import Notify as notify
 from paramiko import AutoAddPolicy, SSHClient, SSHConfig
@@ -82,6 +82,41 @@ class App:
 
         notify.init(APPINDICATOR_ID)
         self._notification = None
+
+        self._watch_resume()
+
+    def _watch_resume(self):
+        """Run an update whenever the machine wakes from suspend.
+
+        Subscribes to logind's PrepareForSleep signal: the boolean argument is
+        True just before sleep and False on resume. The callback fires on the
+        default main context (the GTK main loop), so touching UI is safe.
+        """
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Resume detection unavailable ({e}); relying on interval polls"
+            )
+            return
+        bus.signal_subscribe(
+            "org.freedesktop.login1",
+            "org.freedesktop.login1.Manager",
+            "PrepareForSleep",
+            "/org/freedesktop/login1",
+            None,
+            Gio.DBusSignalFlags.NONE,
+            self._on_prepare_for_sleep,
+        )
+        # Keep the connection object alive; GLib drops the subscription otherwise.
+        self._resume_bus = bus
+
+    def _on_prepare_for_sleep(self, bus, sender, path, iface, signal, params):
+        if params.unpack()[0]:
+            return  # going to sleep, not waking
+        logger.info("Resumed from sleep")
+        if not self._polling:
+            self.update()
 
     def build_menu(self, updates=None):
         if updates is None:

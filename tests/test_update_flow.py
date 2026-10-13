@@ -1,52 +1,6 @@
 """App.update: thread handoff to the main thread, and the update_loop contract."""
 
-import types
-
-import pytest
-
 import app as app_module
-
-
-class InlineThread:
-    """Runs the worker synchronously; can defer instead, to inspect in-flight state."""
-
-    defer = False
-
-    def __init__(self, target=None, daemon=None, **kwargs):
-        self.target = target
-        self.daemon = daemon
-
-    def start(self):
-        if not InlineThread.defer:
-            self.target()
-
-
-class InlinePool:
-    """Synchronous stand-in for ThreadPoolExecutor."""
-
-    def __init__(self, max_workers=None):
-        self.max_workers = max_workers
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc_info):
-        return False
-
-    def map(self, fn, iterable):
-        return [fn(item) for item in iterable]
-
-
-@pytest.fixture
-def inline_execution(monkeypatch):
-    """Polls run synchronously: no worker threads, results applied immediately."""
-    InlineThread.defer = False
-    monkeypatch.setattr(
-        app_module, "threading", types.SimpleNamespace(Thread=InlineThread)
-    )
-    monkeypatch.setattr(app_module, "ThreadPoolExecutor", InlinePool)
-    monkeypatch.setattr(app_module.GLib, "idle_add", lambda fn, *args: fn(*args))
-    return InlineThread
 
 
 def test_update_sets_attention_then_applies_results(

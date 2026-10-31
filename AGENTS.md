@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Overview
-Single-file Python 3 GNOME tray applet (`app.py`, AppIndicator id `remote-apt-dater`) that periodically SSHes into configured Debian hosts, runs `sudo apt-get update` plus a **simulated** `apt-get dist-upgrade` (`-s` — it never changes remote packages), parses apt's `Inst <pkg> [<installed>] (<candidate>)` lines, and surfaces pending upgrades in the tray: icon label with count, a menu listing each pending package, a desktop notification, and an "Update now" action that launches a locally configured upgrade command.
+Single-file Python 3 GNOME tray applet (`app.py`, AppIndicator id `remote-apt-dater`) that periodically SSHes into configured Debian hosts, runs `sudo apt-get update` plus a **simulated** `apt-get dist-upgrade` (`-s` — it never changes remote packages), parses apt's `Inst <pkg> [<installed>] (<candidate>)` lines, and surfaces pending upgrades in the tray: icon label with count, a menu listing each pending package, a desktop notification, and a "Launch apt-dater" action that launches a locally configured upgrade command.
 
 ## Architecture & Data Flow
 One class `App` (plus `acquire_instance_lock()` for single-instance startup: a non-blocking `fcntl.flock` on `$XDG_RUNTIME_DIR/remote-apt-dater.lock`, fallback `/tmp`; a second launch logs and exits 1, and the kernel releases the lock on process exit — no stale locks). Event model is entirely the GLib/GTK main loop. SSH polls run off the main thread: `update()` spawns one daemon coordinator thread that fans out per-host `_poll_host` calls through a `ThreadPoolExecutor` (one worker per configured host), then hands results back with `GLib.idle_add(self._apply_results, results)`. All GTK/AppIndicator/Notify calls stay on the main thread (`_apply_results`); `_poll_host` must never touch them. A `self._polling` guard makes re-entrant `update()` calls (e.g. mashing "Check now") no-ops. Other blocking work (`subprocess` in `upgrade`/`unlock_agent`) still runs on the main thread.
@@ -13,7 +13,7 @@ flowchart LR
   U -->|thread pool, paramiko per ssh_hosts entry| S["remote: apt-get update<br>+ -s dist-upgrade"]
   S -->|parse 'Inst ' lines| P[set of (pkg, old, new)]
   P -->|GLib.idle_add| UI["icon / label / menu / notification<br>(main thread, _apply_results)"]
-  M["Update now / notification action"] --> C["Popen upgrade_command"] --> U
+  M["Launch apt-dater / notification action"] --> C["Popen upgrade_command"] --> U
   L["Unlock SSH Agent"] --> X["Popen unlock_agent_command"] --> U
 ```
 
@@ -27,6 +27,7 @@ flowchart LR
 Flat repository, no package structure:
 - `app.py` — entire application (~310 lines)
 - `sleeping.svg`, `updating.svg`, `locked.svg` — tray state icons (resolved relative to the script directory via `Indicator.new_with_path`)
+- `remote-apt-dater.svg` — application icon (Debian swirl on a red rounded tile; swirl from the Debian Open Logo), referenced by the user's `~/.local/share/applications/AppRemoteIndicator.desktop` via an absolute `Icon=` path; not used by `app.py` itself
 - `tests/` — pytest suite (headless: stubs GTK/Notify, no network/display)
 - `.venv/` — local uv-managed Python venv (gitignored)
 
@@ -58,6 +59,7 @@ No lint or packaging commands exist. `ruff` is an IDE-level preference only.
 | `uv.lock` | Exact-pinned lockfile incl. transitive deps (tracked in git) |
 | `tests/` | Pytest suite + `conftest.py` stubs (headless; run with `uv run pytest`) |
 | `sleeping.svg` / `updating.svg` / `locked.svg` | Tray icon states |
+| `remote-apt-dater.svg` | Application icon for the `.desktop` entry (Debian swirl) |
 
 ## Runtime/Tooling Preferences
 - **Python 3.14** (`requires-python = ">=3.14"` in `pyproject.toml`; venv at `.venv`, managed by uv); run from the repository root — the app resolves `config.ini` and icons relative to `app.py`'s directory, so it does not need to be installed and there is no packaging metadata (not installable).

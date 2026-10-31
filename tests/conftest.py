@@ -197,6 +197,7 @@ def make_app():
         obj._last_update = None
         obj._polling = False
         obj._notification = None
+        obj._check_now_item = None
         return obj
 
     return _make

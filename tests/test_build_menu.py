@@ -68,19 +68,17 @@ def test_last_checked_is_omitted_before_first_poll(make_app):
     assert not find_item(menu, lambda i: i.label.startswith("Last checked"))
 
 
-def test_update_now_only_with_pending_updates(make_app):
+def test_launch_apt_dater_is_always_available(make_app):
     obj = make_app()
 
-    assert find_item(obj.build_menu(), lambda i: i.label == "Update now") is None
-
-    menu = obj.build_menu({("docker", "1", "2")})
-    item = find_item(menu, lambda i: i.label == "Update now")
-    assert item is not None
-    # Clicking it must run the configured upgrade command.
-    assert item.callbacks["activate"] == obj.upgrade
+    for menu in (obj.build_menu(), obj.build_menu({("docker", "1", "2")})):
+        item = find_item(menu, lambda i: i.label == "Launch apt-dater")
+        assert item is not None
+        # Clicking it must run the configured upgrade command.
+        assert item.callbacks["activate"] == obj.upgrade
 
 
-def test_check_now_is_always_available(make_app):
+def test_check_now_is_wired(make_app):
     obj = make_app()
 
     for menu in (obj.build_menu(), obj.build_menu({("docker", "1", "2")})):

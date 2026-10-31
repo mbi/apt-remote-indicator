@@ -1,5 +1,7 @@
 """App.update: thread handoff to the main thread, and the update_loop contract."""
 
+from conftest import find_item
+
 import app as app_module
 
 
@@ -30,6 +32,26 @@ def test_update_runs_the_poll_off_the_main_thread(make_app, inline_execution):
 
     assert obj._polling is True  # in flight until results are applied
     assert obj._indicator.label == ""
+
+
+def test_check_now_disabled_while_poll_in_flight(make_app, inline_execution):
+    """The user must not be able to stack a second poll by clicking again."""
+    obj = make_app()
+    obj._poll_host = lambda ssh_host: (set(), True)
+    menu = obj.build_menu()
+    obj._indicator.set_menu(menu)
+    inline_execution.defer = True  # leave the poll in flight
+
+    obj.update()
+
+    item = find_item(menu, lambda i: i.label == "Check now")
+    assert item.sensitive is False
+
+    # Results applied -> menu rebuilt, action clickable again.
+    obj._apply_results([(set(), True)])
+
+    item = find_item(obj._indicator.menu, lambda i: i.label == "Check now")
+    assert item.sensitive is True
 
 
 def test_update_closes_stale_notification(make_app, inline_execution):

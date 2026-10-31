@@ -82,6 +82,7 @@ class App:
 
         notify.init(APPINDICATOR_ID)
         self._notification = None
+        self._check_now_item = None
 
         self._watch_resume()
 
@@ -148,16 +149,19 @@ class App:
             updated_item = gtk.MenuItem(label=f"Last checked {updated_time}")
             updated_item.set_sensitive(False)
             menu.append(updated_item)
-        menu.append(gtk.SeparatorMenuItem.new())
-
-        if updates:
-            item_upgrade = gtk.MenuItem(label="Update now")
-            item_upgrade.connect("activate", self.upgrade)
-            menu.append(item_upgrade)
 
         item_update = gtk.MenuItem(label="Check now")
         item_update.connect("activate", self.update)
+        # update() greys this out while a poll is in flight; the next
+        # _apply_results rebuilds the menu with a fresh, sensitive item.
+        self._check_now_item = item_update
         menu.append(item_update)
+
+        menu.append(gtk.SeparatorMenuItem.new())
+
+        item_upgrade = gtk.MenuItem(label="Launch apt-dater")
+        item_upgrade.connect("activate", self.upgrade)
+        menu.append(item_upgrade)
 
         if self._ssh_agent_locked:
             item_unlock = gtk.MenuItem(label="Unlock SSH Agent")
@@ -199,6 +203,9 @@ class App:
 
         ssh_hosts = self._config["ssh"]["ssh_hosts"].split(",")
         self._polling = True
+
+        if self._check_now_item is not None:
+            self._check_now_item.set_sensitive(False)
 
         def poll_all():
             try:

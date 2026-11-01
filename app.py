@@ -331,24 +331,36 @@ class App:
 
         # Avoid looping when called with timeout_add_seconds
 
-    def upgrade(self, *args, **kwargs):
-        logger.info("Running upgrade")
-        proc = subprocess.Popen(
-            shlex.split(self._config["update"]["upgrade_command"], posix=False)
-        )
+    def _run_command(self, label, cmd):
+        """Launch cmd without blocking the GTK main loop."""
+        logger.info(f"Running {label}:" + str(cmd))
+        proc = subprocess.Popen(cmd)
+        threading.Thread(
+            target=self._wait_for_command, args=(proc,), daemon=True
+        ).start()
+
+    def _wait_for_command(self, proc):
+        """Reap a launched command off the main thread, then refresh the counts."""
         try:
-            _outs, _errs = proc.communicate()
+            proc.communicate()
         finally:
-            GLib.timeout_add_seconds(1, self.update)
+            GLib.idle_add(self._refresh_after_command)
+
+    def _refresh_after_command(self):
+        GLib.timeout_add_seconds(1, self.update)
+        return False  # idle handlers must not recur
+
+    def upgrade(self, *args, **kwargs):
+        self._run_command(
+            "upgrade command",
+            shlex.split(self._config["update"]["upgrade_command"], posix=True),
+        )
 
     def unlock_agent(self, *args, **kwargs):
-        cmd = shlex.split(self._config["update"]["unlock_agent_command"], posix=True)
-        logger.info("Running unlock command:" + str(cmd))
-        proc = subprocess.Popen(cmd)
-        try:
-            _outs, _errs = proc.communicate()
-        finally:
-            GLib.timeout_add_seconds(1, self.update)
+        self._run_command(
+            "unlock command",
+            shlex.split(self._config["update"]["unlock_agent_command"], posix=True),
+        )
 
 
 if __name__ == "__main__":

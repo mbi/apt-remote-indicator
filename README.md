@@ -31,6 +31,15 @@ the GTK main thread once all results are in.
 The menu lists each pending package and its version, plus "Update now"
 (runs the configured local upgrade command) and "Check now".
 
+## Resume from sleep
+
+On wake the applet probes the SSH agent (`ssh-add -l`). Agents that lock on
+suspend — OpenSSH's `ssh-add -x`, keyrings that lock with the session — stop
+exposing keys, so instead of a poll that would fail, the configured
+`unlock_agent_command` is launched (one terminal asking for your passphrase),
+and the poll runs once it exits. If the probe cannot determine the agent state,
+the applet falls back to a normal poll.
+
 ## Requirements
 
 - Linux with an AppIndicator-compatible tray (AppIndicator3, libnotify, journald)
@@ -54,7 +63,7 @@ ssh_hosts = user@host1,user@host2   ; comma-separated user@host entries
 [update]
 update_interval = 900               ; seconds between polls
 upgrade_command = kitty -e bash -c "sudo apt-get upgrade -y"   ; run locally
-unlock_agent_command = ssh-add      ; offered when all hosts fail
+unlock_agent_command = ssh-add      ; run after resume when locked; offered when all hosts fail
 ssh_agent_socket = /run/user/1000/keyring/ssh  ; optional, sets SSH_AUTH_SOCK
 ```
 

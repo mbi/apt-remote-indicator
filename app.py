@@ -37,6 +37,34 @@ logger.setLevel(logging.INFO)
 
 LOCK_FILE = APPINDICATOR_ID + ".lock"
 
+AGENT_PROBE_TIMEOUT = 2
+
+
+def ssh_agent_has_identities(timeout=AGENT_PROBE_TIMEOUT):
+    """Report whether the running ssh-agent exposes at least one identity.
+
+    Returns True when the agent lists at least one key, False when the agent is
+    reachable but exposes no identities (empty, or locked by `ssh-add -x` /
+    a keyring locking on suspend), and None when the state is unknown (no
+    ssh-add, agent unreachable, probe hung). Callers must not treat None as
+    "locked": spawning an unlock terminal on an unknown state is noise.
+    """
+    try:
+        result = subprocess.run(
+            ["ssh-add", "-l"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+    except OSError, subprocess.SubprocessError:
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:  # "The agent has no identities."
+        return False
+    return None
+
 
 def acquire_instance_lock():
     """Return an fd holding an exclusive instance lock, or None if one is held.
@@ -87,7 +115,7 @@ class App:
         self._watch_resume()
 
     def _watch_resume(self):
-        """Run an update whenever the machine wakes from suspend.
+        """React whenever the machine wakes from suspend.
 
         Subscribes to logind's PrepareForSleep signal: the boolean argument is
         True just before sleep and False on resume. The callback fires on the
@@ -116,8 +144,38 @@ class App:
         if params.unpack()[0]:
             return  # going to sleep, not waking
         logger.info("Resumed from sleep")
-        if not self._polling:
+        if self._polling:
+            return
+        # Probing the agent can wait on a keyring that is still waking up, so
+        # keep it off the main loop.
+        threading.Thread(target=self._resume, daemon=True).start()
+
+    def _resume(self):
+        """Wake handler body, off the main thread: unlock the agent if needed.
+
+        Agents that lock on suspend (OpenSSH's `ssh-add -x`, keyrings that
+        lock with the session) stop exposing identities, so the first poll
+        after a wake fails and the user has to unlock by hand. Launch the
+        configured unlock command instead; the usual post-command refresh then
+        runs the poll.
+        """
+        has_identities = None
+        if self._config["update"].get("unlock_agent_command"):
+            has_identities = ssh_agent_has_identities()
+        GLib.idle_add(self._after_resume, has_identities)
+
+    def _after_resume(self, has_identities):
+        """Act on the resume decision on the main thread."""
+        if self._polling:
+            return False
+        if has_identities is False:
+            logger.info("SSH agent has no identities after resume; unlocking")
+            self._ssh_agent_locked = True
+            self._indicator.set_icon_full("locked.svg", "SSH agent locked")
+            self.unlock_agent()
+        else:
             self.update()
+        return False
 
     def build_menu(self, updates=None):
         if updates is None:

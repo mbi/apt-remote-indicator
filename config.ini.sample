@@ -4,6 +4,8 @@ ssh_hosts = username@hostname,username2@hostname2
 
 [update]
 upgrade_command = kitty -o hide_window_decorations=no /bin/sh -c apt-dater
+# Launched automatically after resume when the agent no longer exposes keys,
+# and offered in the menu when every host fails.
 unlock_agent_command = kitty -o hide_window_decorations=no /bin/sh -c ssh-add
 update_interval = 1200
 

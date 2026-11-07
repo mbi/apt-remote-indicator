@@ -9,7 +9,7 @@ def test_update_sets_attention_then_applies_results(
     make_app, stub_notify, inline_execution
 ):
     obj = make_app()
-    obj._poll_host = lambda ssh_host: ({("docker", "1", "2")}, True)
+    obj._poll_host = lambda ssh_host: ({("docker", "1", "2")}, None)
 
     obj.update()
 
@@ -25,7 +25,7 @@ def test_update_sets_attention_then_applies_results(
 def test_update_runs_the_poll_off_the_main_thread(make_app, inline_execution):
     """The GTK main loop must not be blocked by the SSH poll."""
     obj = make_app()
-    obj._poll_host = lambda ssh_host: (set(), True)
+    obj._poll_host = lambda ssh_host: (set(), None)
     inline_execution.defer = True  # capture the worker without running it
 
     obj.update()
@@ -37,7 +37,7 @@ def test_update_runs_the_poll_off_the_main_thread(make_app, inline_execution):
 def test_check_now_disabled_while_poll_in_flight(make_app, inline_execution):
     """The user must not be able to stack a second poll by clicking again."""
     obj = make_app()
-    obj._poll_host = lambda ssh_host: (set(), True)
+    obj._poll_host = lambda ssh_host: (set(), None)
     menu = obj.build_menu()
     obj._indicator.set_menu(menu)
     inline_execution.defer = True  # leave the poll in flight
@@ -48,7 +48,7 @@ def test_check_now_disabled_while_poll_in_flight(make_app, inline_execution):
     assert item.sensitive is False
 
     # Results applied -> menu rebuilt, action clickable again.
-    obj._apply_results([(set(), True)])
+    obj._apply_results([(set(), None)])
 
     item = find_item(obj._indicator.menu, lambda i: i.label == "Check now")
     assert item.sensitive is True
@@ -60,14 +60,14 @@ def test_update_closes_stale_notification(make_app, inline_execution):
         "Upgrades available", "2 upgrades", "sleeping.svg"
     )
     obj._notification = old
-    obj._poll_host = lambda ssh_host: (set(), True)
+    obj._poll_host = lambda ssh_host: (set(), None)
 
     obj.update()
 
     assert old.closed is True
 
 
-def test_poll_host_exception_marks_every_host_failed(make_app, inline_execution):
+def test_poll_coordinator_exception_marks_every_host_failed(make_app, inline_execution):
     obj = make_app()
 
     def boom(ssh_host):
@@ -77,8 +77,8 @@ def test_poll_host_exception_marks_every_host_failed(make_app, inline_execution)
 
     obj.update()
 
-    assert obj._indicator.icon == "locked.svg"
-    assert obj._ssh_agent_locked is True
+    assert obj._indicator.icon == "unreachable.svg"
+    assert obj._ssh_agent_locked is False  # not evidence of a locked agent
     assert obj._indicator.label == ""
 
 

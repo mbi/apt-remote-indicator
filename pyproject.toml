@@ -9,6 +9,12 @@ dependencies = [
     "systemd-python",
 ]
 
+[tool.isort]
+# isort defaults to 79 columns while ruff-format uses 88, so each hook undid the
+# other's wrapping of long imports. The black profile uses ruff-compatible
+# 88-column wrapping (parentheses, trailing comma, one name per line).
+profile = "black"
+
 [tool.uv]
 # Plain script project: never build/install the project itself, only its deps.
 package = false

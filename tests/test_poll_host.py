@@ -80,9 +80,9 @@ def test_parses_inst_lines_into_updates(make_app, fake_ssh):
         "Conf libc6 (2.36-9 Debian-Security:12 [amd64])",
         "Inst curl [8.0.1-1] (8.1.0-1 Debian:12 [amd64])",
     ]
-    updates, ok = make_app()._poll_host("mbi@host1")
+    updates, failure = make_app()._poll_host("mbi@host1")
 
-    assert ok is True
+    assert failure is None
     assert updates == {
         ("libc6", "2.36-8", "2.36-9"),
         ("curl", "8.0.1-1", "8.1.0-1"),
@@ -136,9 +136,19 @@ def test_no_ssh_config_uses_host_as_given(make_app, fake_ssh):
 def test_connection_failure_is_reported_and_not_raised(make_app, fake_ssh):
     fake_ssh.error = OSError("timed out")
 
-    updates, ok = make_app()._poll_host("mbi@host1")
+    updates, failure = make_app()._poll_host("mbi@host1")
 
-    assert ok is False
+    assert failure == "other"
+    assert updates == set()
+
+
+def test_authentication_failure_is_distinguished(make_app, fake_ssh):
+    """A locked agent surfaces as auth rejection, not as "unreachable"."""
+    fake_ssh.error = app_module.AuthenticationException("Authentication failed.")
+
+    updates, failure = make_app()._poll_host("mbi@host1")
+
+    assert failure == "auth"
     assert updates == set()
 
 

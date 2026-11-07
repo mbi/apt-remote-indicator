@@ -26,7 +26,8 @@ the GTK main thread once all results are in.
 |---|---|
 | `sleeping.svg` | Up to date / poll succeeded |
 | `updating.svg` | A poll is in flight |
-| `locked.svg` | Every host failed (e.g. locked ssh-agent); offers an "Unlock SSH Agent" action |
+| `unreachable.svg` | Every host failed at the network level (Wi-Fi/VPN/DNS down); no unlock action is offered |
+| `locked.svg` | Every host rejected authentication (e.g. locked ssh-agent); offers an "Unlock SSH Agent" action |
 
 The menu lists each pending package and its version, plus "Update now"
 (runs the configured local upgrade command) and "Check now".
@@ -39,6 +40,11 @@ exposing keys, so instead of a poll that would fail, the configured
 `unlock_agent_command` is launched (one terminal asking for your passphrase),
 and the poll runs once it exits. If the probe cannot determine the agent state,
 the applet falls back to a normal poll.
+
+When no unlock is needed, the poll waits 10 seconds (`RESUME_POLL_DELAY`):
+logind reports resume before Wi-Fi/VPN/DNS are back. If the network is still
+unreachable after that, the tray shows `unreachable.svg` without offering the
+agent unlock — only hosts that actually reject authentication do that.
 
 ## Requirements
 

@@ -23,7 +23,7 @@ from gi.repository import AppIndicator3 as appindicator
 from gi.repository import Gio, GLib
 from gi.repository import Gtk as gtk
 from gi.repository import Notify as notify
-from paramiko import AutoAddPolicy, SSHClient, SSHConfig
+from paramiko import AuthenticationException, AutoAddPolicy, SSHClient, SSHConfig
 from systemd.journal import JournalHandler
 
 APPINDICATOR_ID = "remote-apt-dater"
@@ -38,6 +38,11 @@ logger.setLevel(logging.INFO)
 LOCK_FILE = APPINDICATOR_ID + ".lock"
 
 AGENT_PROBE_TIMEOUT = 2
+
+# Wake-up grace period: logind signals resume before Wi-Fi/VPN/DNS are back, so
+# an immediate poll only records "Network is unreachable" and looks like a
+# broken agent. Give the network a moment first.
+RESUME_POLL_DELAY = 10
 
 
 def ssh_agent_has_identities(timeout=AGENT_PROBE_TIMEOUT):
@@ -174,8 +179,13 @@ class App:
             self._indicator.set_icon_full("locked.svg", "SSH agent locked")
             self.unlock_agent()
         else:
-            self.update()
+            GLib.timeout_add_seconds(RESUME_POLL_DELAY, self._resume_poll)
         return False
+
+    def _resume_poll(self):
+        """Poll once the post-resume grace period has elapsed."""
+        if not self._polling:
+            self.update()
 
     def build_menu(self, updates=None):
         if updates is None:
@@ -271,7 +281,7 @@ class App:
                     results = list(pool.map(self._poll_host, ssh_hosts))
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Polling failed: {e}")
-                results = [(set(), False)] * len(ssh_hosts)
+                results = [(set(), "other")] * len(ssh_hosts)
             GLib.idle_add(self._apply_results, results)
 
         threading.Thread(target=poll_all, daemon=True).start()
@@ -279,8 +289,10 @@ class App:
     def _poll_host(self, ssh_host):
         """Poll one host off the main thread.
 
-        Returns (set of (pkg, version), ok: bool); ok is False on any
-        connection/exec failure. Must not touch GTK/AppIndicator/Notify.
+        Returns (set of (pkg, version), failure) where failure is None on
+        success, "auth" when the host rejected our credentials (the signature
+        of a locked agent), or "other" for connection/exec failures such as
+        an unreachable network. Must not touch GTK/AppIndicator/Notify.
         """
         available_updates = set()
         username, host = ssh_host.strip().split("@")
@@ -324,11 +336,14 @@ class App:
             ):
                 if match:
                     available_updates.add(match.groups())
-            return available_updates, True
+            return available_updates, None
 
+        except AuthenticationException as e:
+            logger.warning(f"Authentication failed for {username}@{host}: {e}")
+            return available_updates, "auth"
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Can't connect to {username}@{host}: {e}")
-            return available_updates, False
+            return available_updates, "other"
         finally:
             try:
                 logger.debug("Closing ssh connection")
@@ -341,20 +356,34 @@ class App:
         self._polling = False
         available_updates = set()
         failed_hosts = 0
-        for updates, ok in results:
+        auth_failures = 0
+        for updates, failure in results:
             available_updates |= updates
-            if not ok:
+            if failure is not None:
                 failed_hosts += 1
+                if failure == "auth":
+                    auth_failures += 1
 
         if failed_hosts == len(results):
-            # Everything failed: locked state, offer SSH agent unlock.
-            logger.warning("Can't connect to any host")
-            self._indicator.set_icon_full(
-                "locked.svg",
-                "Error connecting",
-            )
             self._indicator.set_label("", "")
-            self._ssh_agent_locked = True
+            if auth_failures:
+                # Credentials rejected everywhere: the agent is the likely
+                # culprit, so offer the unlock action.
+                logger.warning("Can't connect to any host")
+                self._indicator.set_icon_full(
+                    "locked.svg",
+                    "Error connecting",
+                )
+                self._ssh_agent_locked = True
+            else:
+                # Network/VPN still down, DNS not ready, host unreachable:
+                # nothing to do with the agent, so don't offer an unlock.
+                logger.warning("Can't reach any host")
+                self._indicator.set_icon_full(
+                    "unreachable.svg",
+                    "Can't reach hosts",
+                )
+                self._ssh_agent_locked = False
         else:
             self._indicator.set_icon_full(
                 "sleeping.svg",

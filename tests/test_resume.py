@@ -41,17 +41,22 @@ def resume_app(make_app, inline_execution, monkeypatch):
     """App with a controllable agent probe and recorded command launches."""
     application = make_app()
     launched = []
-    state = {"identities": True}
+    state = {"identities": True, "timeouts": []}
     monkeypatch.setattr(
         app_module.subprocess,
         "Popen",
         lambda argv, *a, **k: launched.append(FakeProc(argv)) or launched[-1],
     )
     monkeypatch.setattr(app_module.threading, "Thread", ArgForwardingThread)
-    monkeypatch.setattr(app_module.GLib, "timeout_add_seconds", lambda *a: None)
+    monkeypatch.setattr(
+        app_module.GLib,
+        "timeout_add_seconds",
+        lambda delay, callback: state["timeouts"].append((delay, callback)),
+    )
     monkeypatch.setattr(
         app_module, "ssh_agent_has_identities", lambda: state["identities"]
     )
+    application._poll_host = lambda ssh_host: (set(), None)
     return application, launched, state
 
 
@@ -86,12 +91,23 @@ def test_agent_probe_distinguishes_unknown_from_locked(monkeypatch):
     assert app_module.ssh_agent_has_identities() is None
 
 
-def test_resume_with_loaded_agent_polls(resume_app):
-    """Keys are still available: wake up behaves like a normal check."""
-    obj, launched, _state = resume_app
+def run_delayed_poll(obj, state):
+    ((delay, callback),) = state["timeouts"]
+    assert delay == app_module.RESUME_POLL_DELAY
+    assert callback == obj._resume_poll
+    callback()
+
+
+def test_resume_with_loaded_agent_polls_after_a_grace_period(resume_app):
+    """Wake-up polls are deferred: Wi-Fi/DNS are not back the instant we wake."""
+    obj, launched, state = resume_app
     signal(obj, False)
 
     assert launched == []
+    assert obj._last_update is None  # not polled yet
+
+    run_delayed_poll(obj, state)
+
     assert obj._last_update is not None
     assert obj._indicator.statuses == [
         app_module.appindicator.IndicatorStatus.ATTENTION,
@@ -120,11 +136,13 @@ def test_resume_with_unknown_agent_state_polls(resume_app):
     signal(obj, False)
 
     assert launched == []
+    assert obj._last_update is None
+    run_delayed_poll(obj, state)
     assert obj._last_update is not None
 
 
 def test_resume_without_unlock_command_polls(resume_app, monkeypatch):
-    obj, launched, _state = resume_app
+    obj, launched, state = resume_app
     del obj._config["update"]["unlock_agent_command"]
     monkeypatch.setattr(
         app_module,
@@ -134,6 +152,8 @@ def test_resume_without_unlock_command_polls(resume_app, monkeypatch):
     signal(obj, False)
 
     assert launched == []
+    assert obj._last_update is None
+    run_delayed_poll(obj, state)
     assert obj._last_update is not None
 
 

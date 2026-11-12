@@ -112,6 +112,11 @@ class App:
         logger.info("Startup complete")
         self._last_update = None
         self._polling = False
+        # Set once a login has succeeded since the last start/resume. Until
+        # then the first connection is serialized so a locked keyring asks
+        # for the passphrase once, not once per parallel host.
+        self._auth_ready = threading.Event()
+        self._auth_lock = threading.Lock()
 
         notify.init(APPINDICATOR_ID)
         self._notification = None
@@ -171,6 +176,9 @@ class App:
 
     def _after_resume(self, has_identities):
         """Act on the resume decision on the main thread."""
+        # Keys can lock while suspended; the next login must be serialized
+        # again so a still-locked keyring prompts once, not once per host.
+        self._auth_ready.clear()
         if self._polling:
             return False
         if has_identities is False:
@@ -286,6 +294,16 @@ class App:
 
         threading.Thread(target=poll_all, daemon=True).start()
 
+    def _connect(self, ssh, host, username):
+        """Open the session with bounded timeouts."""
+        ssh.connect(
+            host,
+            username=username.strip(),
+            timeout=5,
+            banner_timeout=5,
+            auth_timeout=5,
+        )
+
     def _poll_host(self, ssh_host):
         """Poll one host off the main thread.
 
@@ -312,13 +330,17 @@ class App:
 
             logger.debug(f"Connecting to {username}@{host}")
 
-            ssh.connect(
-                host,
-                username=username.strip(),
-                timeout=5,
-                banner_timeout=5,
-                auth_timeout=5,
-            )
+            if self._auth_ready.is_set():
+                self._connect(ssh, host, username)
+            else:
+                # paramiko signs through the agent on every connect, and a
+                # locked keyring (GNOME's agent) pops one password dialog per
+                # signing request: serialize the first login of a round so the
+                # passphrase is asked once, then let the remaining hosts use
+                # the now unlocked agent in parallel.
+                with self._auth_lock:
+                    self._connect(ssh, host, username)
+                    self._auth_ready.set()
             _, stdout_, _ = ssh.exec_command(
                 "sudo apt-get update -q -y && "
                 "sudo apt-get -q -y --ignore-hold --allow-change-held-packages "
@@ -375,6 +397,9 @@ class App:
                     "Error connecting",
                 )
                 self._ssh_agent_locked = True
+                # Re-probe serially on the next poll: the agent may have
+                # relocked without a suspend in between.
+                self._auth_ready.clear()
             else:
                 # Network/VPN still down, DNS not ready, host unreachable:
                 # nothing to do with the agent, so don't offer an unlock.

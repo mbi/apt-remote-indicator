@@ -7,6 +7,7 @@ assert on the menu *model* we build, not on rendered pixels).
 """
 
 import configparser
+import threading
 import types
 from typing import ClassVar
 
@@ -196,6 +197,8 @@ def make_app():
         obj._ssh_agent_locked = locked
         obj._last_update = None
         obj._polling = False
+        obj._auth_ready = threading.Event()
+        obj._auth_lock = threading.Lock()
         obj._notification = None
         obj._check_now_item = None
         return obj

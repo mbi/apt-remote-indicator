@@ -1,5 +1,7 @@
 """App._poll_host: per-host SSH polling, parsing and failure isolation."""
 
+import threading
+
 import pytest
 
 import app as app_module
@@ -161,3 +163,76 @@ def test_connection_is_closed_on_success_and_failure(make_app, fake_ssh):
     fake_ssh.error = OSError("boom")
     obj._poll_host("mbi@host1")
     assert fake_ssh.closed is True
+
+
+def test_first_connect_is_gated_until_a_login_succeeds(make_app, monkeypatch):
+    """A locked keyring must prompt once, not once per parallel host."""
+    obj = make_app()
+    gated = []
+
+    class RecordingClient(FakeSSHClient):
+        def connect(self, host, username=None, **kwargs):
+            gated.append(obj._auth_lock.locked())
+            super().connect(host, username=username, **kwargs)
+
+    monkeypatch.setattr(app_module, "SSHClient", RecordingClient)
+
+    obj._poll_host("mbi@host1")
+    assert gated == [True]  # first login: serialized, so one prompt
+    assert obj._auth_ready.is_set()
+
+    obj._poll_host("mbi@host2")
+    assert gated == [True, False]  # agent proven usable: parallel again
+
+
+def test_parallel_first_connects_reach_the_agent_one_at_a_time(make_app, monkeypatch):
+    """Hosts must not open one keyring dialog each while the agent is locked."""
+    obj = make_app()
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    entered = []
+    lock = threading.Lock()
+
+    class BlockingClient(FakeSSHClient):
+        def connect(self, host, username=None, **kwargs):
+            with lock:
+                entered.append(host)
+                index = len(entered)
+            (first_entered if index == 1 else second_entered).set()
+            if index == 1:
+                # Stands in for the user typing the passphrase.
+                assert release_first.wait(5)
+            super().connect(host, username=username, **kwargs)
+
+    monkeypatch.setattr(app_module, "SSHClient", BlockingClient)
+
+    first = threading.Thread(target=obj._poll_host, args=("mbi@host1",), daemon=True)
+    second = threading.Thread(target=obj._poll_host, args=("mbi@host2",), daemon=True)
+    first.start()
+    assert first_entered.wait(5)
+    second.start()
+    try:
+        # While the first login is pending, the second host must wait in
+        # front of the gate instead of issuing its own signing request.
+        assert second_entered.wait(0.5) is False
+    finally:
+        release_first.set()
+    first.join(5)
+    second.join(5)
+
+    assert entered == ["host1", "host2"]
+    assert obj._auth_ready.is_set()
+
+
+def test_failed_first_login_leaves_the_gate_closed(make_app, fake_ssh):
+    """A cancelled prompt must not be mistaken for a working agent."""
+    obj = make_app()
+    fake_ssh.error = OSError("timed out")
+
+    obj._poll_host("mbi@host1")
+    assert not obj._auth_ready.is_set()
+
+    fake_ssh.error = None
+    obj._poll_host("mbi@host1")
+    assert obj._auth_ready.is_set()

@@ -20,6 +20,13 @@ pending upgrades.
 Hosts are polled in parallel (one thread per host); the tray is updated on
 the GTK main thread once all results are in.
 
+The first login after startup or wake is the exception. A locked ssh-agent
+(keyring) pops one password dialog per signing request, and paramiko signs
+through the agent on every connect, so the first connection of such a round
+is made alone: until one login succeeds, hosts are attempted one at a time
+and the passphrase is asked once. Once a login has succeeded the agent is
+unlocked and the remaining hosts connect in parallel.
+
 ## Tray states
 
 | Icon | Meaning |
@@ -40,6 +47,10 @@ exposing keys, so instead of a poll that would fail, the configured
 `unlock_agent_command` is launched (one terminal asking for your passphrase),
 and the poll runs once it exits. If the probe cannot determine the agent state,
 the applet falls back to a normal poll.
+
+Keys can also relock while suspended without disappearing from the agent
+(`ssh-add -l` still lists them), so every wake re-arms the serialized first
+login: the next poll asks for the passphrase once, not once per host.
 
 When no unlock is needed, the poll waits 10 seconds (`RESUME_POLL_DELAY`):
 logind reports resume before Wi-Fi/VPN/DNS are back. If the network is still

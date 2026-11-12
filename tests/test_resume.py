@@ -184,3 +184,13 @@ def test_resume_skipped_while_poll_in_flight(resume_app, monkeypatch):
     assert obj._last_update is None
     assert obj._indicator.statuses == []
     assert obj._polling is True
+
+
+def test_resume_recloses_the_auth_gate(resume_app):
+    """Keys can lock while suspended; the next login must be serialized."""
+    obj, _launched, _state = resume_app
+    obj._auth_ready.set()
+
+    signal(obj, False)
+
+    assert not obj._auth_ready.is_set()

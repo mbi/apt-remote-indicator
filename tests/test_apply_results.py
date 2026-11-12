@@ -99,3 +99,23 @@ def test_polling_flag_is_cleared(make_app):
     assert obj._polling is False
     assert obj._indicator.status == app_module.appindicator.IndicatorStatus.ACTIVE
     assert obj._last_update is not None
+
+
+def test_all_hosts_rejecting_auth_recloses_the_auth_gate(make_app):
+    """A relocked agent must be probed serially by the next poll again."""
+    obj = make_app()
+    obj._auth_ready.set()
+
+    obj._apply_results([(set(), "auth"), (set(), "auth")])
+
+    assert not obj._auth_ready.is_set()
+
+
+def test_partial_auth_failure_keeps_the_gate_open(make_app):
+    """One host rejecting us says nothing about the agent being locked."""
+    obj = make_app()
+    obj._auth_ready.set()
+
+    obj._apply_results([(set(), "auth"), (set(), None)])
+
+    assert obj._auth_ready.is_set()
